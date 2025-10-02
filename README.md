@@ -20,7 +20,7 @@ build.bat
 ### Usage
 Run
 ```bash
-./syphax_web
+./index
 ```
 then access the default ```http://127.0.0.1:8000/```
 
