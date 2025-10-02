@@ -24,9 +24,9 @@ Run
 ```
 then access the default ```http://127.0.0.1:8000/```
 
-### Including it in your project
-```c
-#include "sw_html_builder.h"
+### CMake module
+```cmake
+target_link_libraries(my_target PUBLIC syphax-web::main)
 ```
 
 ### License
