@@ -19,6 +19,7 @@ endif()
 # Directory setup
 set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
+set(EXAMPLES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/examples")
 
 # setup library macro
 macro(setup_library arg_lib_name arg_source_path arg_include_path)
@@ -40,8 +41,17 @@ macro(setup_executable arg_exec_dir arg_exec_name modules)
     message(STATUS "Generating executable ${arg_exec_name}")
     add_executable(${arg_exec_name} "${arg_exec_dir}/${arg_exec_name}.c")
     target_link_libraries(${arg_exec_name} PUBLIC ${modules})
+    target_compile_definitions(${arg_exec_name} PUBLIC SW_RESOURCES_DIR="${RESOURCES_DIR}/")
     set_target_properties(${arg_exec_name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 endmacro()
 
-setup_executable(${PROJECT_SOURCE_DIR} index main)
+file(GLOB EXAMPLES 	"${EXAMPLES_DIR}/*.c" 
+			"${EXAMPLES_DIR}/*.cpp"
+			"${EXAMPLES_DIR}/**/*.c" 
+			"${EXAMPLES_DIR}/**/*.cpp")
 
+foreach(EXAMPLE ${EXAMPLES})
+   	get_filename_component(EXAMPLE_NAME ${EXAMPLE} NAME_WE)
+   	message(STATUS "Adding example ${EXAMPLE_NAME}")
+    setup_executable(${EXAMPLES_DIR} ${EXAMPLE_NAME} main)
+endforeach()

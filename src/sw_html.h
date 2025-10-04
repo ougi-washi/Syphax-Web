@@ -185,8 +185,12 @@ static void sw_close_tag(c8* output, const c8* tag) {
 
 // HTML structure macros
 #define sw_html(output, content) do { \
-    sw_append(output, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\r\n"); \
     sw_tag(output, "html", {0},content); \
+} while(0);
+
+#define SW_HEADER_200 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\r\n"
+#define sw_header(output) do { \
+    sw_append(output, SW_HEADER); \
 } while(0);
 
 #define sw_head(output, content) do { \
