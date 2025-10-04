@@ -32,3 +32,7 @@ target_link_libraries(my_target PUBLIC syphax-web::main)
 ### License
 MIT License
 
+### Context / Inspiration
+This project was inspire by the familiarity of the functionality and namings in [Mongoose-MIT](https://github.com/openalpr/mongoose-mit).
+The intention is to create a simple, lightweight, and fast web server for C developers.
+The current state of web development is very complex and difficult to learn, this project aims to make it more accessible with modern web implementations.
