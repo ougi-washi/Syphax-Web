@@ -27,27 +27,27 @@
 #define SW_MAX_MULTIPART_SIZE 65536
 #define SW_MAX_CONNS 1000
 
-typedef struct sw_str {
+typedef struct {
     c8 *ptr;
     sz len;
-} sw_str_t;
+} sw_str;
 
-typedef struct sw_http_header {
+typedef struct {
     c8 *name;
     c8 *value;
-} sw_http_header_t;
+} sw_http_header;
 
-typedef struct sw_http_message {
+typedef struct {
     c8 *method;
     c8 *uri;
     c8 *proto;
-    sw_http_header_t headers[SW_MAX_HTTP_HEADERS];
+    sw_http_header headers[SW_MAX_HTTP_HEADERS];
     i32 num_headers;
     c8 *body;
     sz body_len;
     sz content_length;
     i32 is_chunked;
-} sw_http_message_t;
+} sw_http_message;
 
 typedef struct sw_connection {
     i32 sock;
@@ -56,44 +56,48 @@ typedef struct sw_connection {
     sz read_len;
     c8 write_buf[SW_MAX_WRITE_SIZE];
     sz write_len;
-    sw_http_message_t *request;
+    sw_http_message *request;
     void *user_data;
     void (*handler)(struct sw_connection *);
     i32 is_draining;
     time_t last_activity;
-} sw_connection_t;
+} sw_connection;
 
-typedef struct sw_mgr {
+typedef struct {
     i32 epoll_fd;
-    sw_connection_t *conns[SW_MAX_CONNS];
+    sw_connection *conns[SW_MAX_CONNS];
     i32 num_conns;
-    void (*http_handler)(sw_connection_t *, sw_http_message_t *);
-} sw_mgr_t;
+    void (*http_handler)(sw_connection *, sw_http_message *);
+} sw_mgr;
 
-typedef struct sw_http_multipart {
+typedef struct {
     c8 *boundary;
     c8 *data;
     sz data_len;
     c8 *name;
     c8 *filename;
     c8 *content_type;
-} sw_http_multipart_t;
+} sw_http_multipart;
 
-i32 sw_mgr_init(sw_mgr_t *mgr);
-i32 sw_http_listen(sw_mgr_t *mgr, const c8 *url);
-i32 sw_mgr_poll(sw_mgr_t *mgr, i32 timeout_ms);
-void sw_mgr_free(sw_mgr_t *mgr);
-void sw_mgr_set_http_handler(sw_mgr_t *mgr, void (*handler)(sw_connection_t *, sw_http_message_t *));
+extern b8 sw_server_init(void (*http_handler)(sw_connection *, sw_http_message *));
+extern void sw_server_listen(const c8 *addr);
+extern void sw_server_clear();
 
-i32 sw_http_get_var(sw_http_message_t *hm, const c8 *name, c8 *buf, sz buf_len);
-i32 sw_http_reply(sw_connection_t *c, i32 status_code, const c8 *headers, const c8 *fmt, ...);
-i32 sw_printf(sw_connection_t *c, const c8 *fmt, ...);
-i32 sw_match(const c8 *pattern, const c8 *str);
-i32 sw_http_serve_file(sw_connection_t *c, const c8 *path);
-i32 sw_http_next_multipart(sw_http_message_t *hm, sw_http_multipart_t *mp, sz *offset);
+extern i32 sw_mgr_init(sw_mgr *mgr);
+extern i32 sw_http_listen(sw_mgr *mgr, const c8 *url);
+extern i32 sw_mgr_poll(sw_mgr *mgr, i32 timeout_ms);
+extern void sw_mgr_free(sw_mgr *mgr);
+extern void sw_mgr_set_http_handler(sw_mgr *mgr, void (*handler)(sw_connection *, sw_http_message *));
 
-void sw_http_parse_request(sw_connection_t *c);
-i32 sw_http_parse_headers(sw_connection_t *c);
-void sw_http_handle_request(sw_connection_t *c);
+extern i32 sw_http_get_var(sw_http_message *hm, const c8 *name, c8 *buf, sz buf_len);
+extern i32 sw_http_reply(sw_connection *c, i32 status_code, const c8 *headers, const c8 *fmt, ...);
+extern i32 sw_printf(sw_connection *c, const c8 *fmt, ...);
+extern i32 sw_match(const c8 *pattern, const c8 *str);
+extern i32 sw_http_serve_file(sw_connection *c, const c8 *path);
+extern i32 sw_http_next_multipart(sw_http_message *hm, sw_http_multipart *mp, sz *offset);
+
+extern void sw_http_parse_request(sw_connection *c);
+extern i32 sw_http_parse_headers(sw_connection *c);
+extern void sw_http_handle_request(sw_connection *c);
 
 #endif // SW_SERVER_H

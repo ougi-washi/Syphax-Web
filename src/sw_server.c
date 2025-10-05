@@ -2,6 +2,91 @@
 #include <sys/epoll.h>
 #include <sys/sendfile.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <signal.h>
+#else
+#include <signal.h>
+#include <unistd.h>
+#endif
+
+// Main web server manager
+static sw_mgr mgr_main;
+
+b8 sw_server_init(void (*http_handler)(sw_connection *, sw_http_message *)) {
+    if (sw_mgr_init(&mgr_main) != 0) {
+        fprintf(stderr, "Failed to initialize manager\n");
+        return false;
+    }
+    printf("sw_server_init :: Initializing, http_handler = %p\n", http_handler);
+    sw_mgr_set_http_handler(&mgr_main, http_handler);
+    printf("sw_server_init :: Server initialized, http_handler = %p\n", mgr_main.http_handler);
+    
+    return true;
+}
+
+// Catch SIGINT and SIGTERM
+volatile sig_atomic_t stop_requested = 0;
+
+#ifdef _WIN32
+void sig_handler(int signo) {
+    stop_requested = 1;
+    printf("\nExiting...\n");
+}
+
+BOOL WINAPI console_handler(DWORD dwCtrlType) {
+    switch (dwCtrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            stop_requested = 1;
+            printf("\nExiting...\n");
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+#else // _WIN32
+void sig_handler(int signo) {
+    stop_requested = 1;
+    printf("\nExiting...\n");
+}
+#endif // _WIN32
+
+void sw_server_listen(const c8 *addr) {
+    sw_mgr_init(&mgr_main);
+    if (sw_http_listen(&mgr_main, addr) != 0) {
+        fprintf(stderr, "Failed to listen with address %s\n", addr);
+        return;
+    }
+   
+#ifdef _WIN32
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+    SetConsoleCtrlHandler(console_handler, TRUE);
+#else // _WIN32
+    // Catch SIGINT and SIGTERM
+    struct sigaction sa;
+    sa.sa_handler = sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // or SA_RESTART to restart some syscalls
+    sigaction(SIGINT,  &sa, NULL); // Ctrl+C
+    sigaction(SIGTERM, &sa, NULL); // kill, systemd stop, etc.
+    sigaction(SIGHUP,  &sa, NULL); // terminal close / hangup (optional)
+#endif // _WIN32
+
+    printf("Syphax Web Server running on address %s\nPress Ctrl+C to stop\n", addr);
+    while (!stop_requested) {
+        sw_mgr_poll(&mgr_main, 1000);  
+    }
+}
+
+void sw_server_clear() {
+    sw_mgr_free(&mgr_main);
+}
+
 static i32 sw_set_nonblocking(i32 sock) {
     i32 flags = fcntl(sock, F_GETFL, 0);
     if (flags == -1) return -1;
@@ -35,7 +120,7 @@ static i32 sw_create_listener(const c8 *addr, i32 port) {
     return sock;
 }
 
-i32 sw_mgr_init(sw_mgr_t *mgr) {
+i32 sw_mgr_init(sw_mgr *mgr) {
     memset(mgr, 0, sizeof(*mgr));
     mgr->epoll_fd = epoll_create1(0);
     if (mgr->epoll_fd == -1) return -1;
@@ -43,7 +128,7 @@ i32 sw_mgr_init(sw_mgr_t *mgr) {
 }
 
 // TODO: check https support
-i32 sw_http_listen(sw_mgr_t *mgr, const c8 *url) {
+i32 sw_http_listen(sw_mgr *mgr, const c8 *url) {
     c8 host[256];
     i32 port;
     
@@ -77,14 +162,14 @@ i32 sw_http_listen(sw_mgr_t *mgr, const c8 *url) {
     return 0;
 }
 
-static sw_connection_t *sw_accept_connection(sw_mgr_t *mgr, i32 sock) {
+static sw_connection *sw_accept_connection(sw_mgr *mgr, i32 sock) {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
     i32 conn_sock = accept(sock, (struct sockaddr *)&addr, &len);
     
     if (conn_sock == -1) return NULL;
     
-    sw_connection_t *conn = calloc(1, sizeof(*conn));
+    sw_connection *conn = calloc(1, sizeof(*conn));
     if (!conn) {
         close(conn_sock);
         return NULL;
@@ -105,10 +190,12 @@ static sw_connection_t *sw_accept_connection(sw_mgr_t *mgr, i32 sock) {
     }
     
     mgr->conns[mgr->num_conns++] = conn;
+    printf("Accepted connection on address %d, socket %d\n", addr.sin_addr.s_addr, conn_sock);
     return conn;
 }
 
-static void sw_close_connection(sw_mgr_t *mgr, sw_connection_t *conn) {
+static void sw_close_connection(sw_mgr *mgr, sw_connection *conn) {
+    printf("Closing connection socket %d\n", conn->sock);
     for (i32 i = 0; i < mgr->num_conns; i++) {
         if (mgr->conns[i] == conn) {
             mgr->conns[i] = mgr->conns[--mgr->num_conns];
@@ -125,7 +212,8 @@ static void sw_close_connection(sw_mgr_t *mgr, sw_connection_t *conn) {
     free(conn);
 }
 
-static i32 sw_read_connection(sw_connection_t *conn) {
+static i32 sw_read_connection(sw_connection *conn) {
+    printf("Reading connection socket %d\n", conn->sock);
     c8 buf[4096];
     sz n = read(conn->sock, buf, sizeof(buf));
     
@@ -142,7 +230,8 @@ static i32 sw_read_connection(sw_connection_t *conn) {
     return n;
 }
 
-static i32 sw_write_connection(sw_connection_t *conn) {
+static i32 sw_write_connection(sw_connection *conn) {
+    printf("Writing connection socket %d\n", conn->sock);
     if (conn->write_len == 0) return 0;
     
     sz n = write(conn->sock, conn->write_buf, conn->write_len);
@@ -155,7 +244,7 @@ static i32 sw_write_connection(sw_connection_t *conn) {
     return n;
 }
 
-i32 sw_mgr_poll(sw_mgr_t *mgr, i32 timeout_ms) {
+i32 sw_mgr_poll(sw_mgr *mgr, i32 timeout_ms) {
     struct epoll_event events[64];
     i32 nfds = epoll_wait(mgr->epoll_fd, events, 64, timeout_ms);
     
@@ -163,9 +252,9 @@ i32 sw_mgr_poll(sw_mgr_t *mgr, i32 timeout_ms) {
         if (events[i].data.fd >= 0) {
             i32 sock = events[i].data.fd;
             sw_accept_connection(mgr, sock);
-        } else {
-            sw_connection_t *conn = events[i].data.ptr;
-            
+        } 
+        else {
+            sw_connection *conn = events[i].data.ptr;
             if (events[i].events & (EPOLLHUP | EPOLLERR)) {
                 sw_close_connection(mgr, conn);
                 continue;
@@ -177,11 +266,11 @@ i32 sw_mgr_poll(sw_mgr_t *mgr, i32 timeout_ms) {
                     sw_close_connection(mgr, conn);
                     continue;
                 }
-                
                 sw_http_parse_request(conn);
                 
                 // If we have a complete request and a handler is set, call it
                 if (conn->request && mgr->http_handler) {
+                    printf("Calling handler for connection socket %d\n", conn->sock);
                     mgr->http_handler(conn, conn->request);
                 }
             }
@@ -211,20 +300,21 @@ i32 sw_mgr_poll(sw_mgr_t *mgr, i32 timeout_ms) {
     return nfds;
 }
 
-void sw_mgr_set_http_handler(sw_mgr_t *mgr, void (*handler)(sw_connection_t *, sw_http_message_t *)) {
+void sw_mgr_set_http_handler(sw_mgr *mgr, void (*handler)(sw_connection *, sw_http_message *)) {
     mgr->http_handler = handler;
 }
 
-void sw_mgr_free(sw_mgr_t *mgr) {
+void sw_mgr_free(sw_mgr *mgr) {
     for (i32 i = 0; i < mgr->num_conns; i++) {
         sw_close_connection(mgr, mgr->conns[i]);
     }
     close(mgr->epoll_fd);
 }
 
-void sw_http_parse_request(sw_connection_t *c) {
+void sw_http_parse_request(sw_connection *c) {
+    printf("Parsing request for connection socket %d\n", c->sock);
     if (c->request) return;
-    
+    printf("sw_http_parse_request :: Found requests\n");
     c8 *buf = c->read_buf;
     
     c8 *line_end = strstr(buf, "\r\n");
@@ -238,7 +328,7 @@ void sw_http_parse_request(sw_connection_t *c) {
         return;
     }
     
-    sw_http_message_t *hm = calloc(1, sizeof(*hm));
+    sw_http_message *hm = calloc(1, sizeof(*hm));
     if (!hm) return;
     
     hm->method = strdup(method);
@@ -285,16 +375,17 @@ void sw_http_parse_request(sw_connection_t *c) {
     memmove(c->read_buf, c->read_buf + c->read_len - (body_start ? strlen(body_start) : 0), 
             body_start ? strlen(body_start) : 0);
     c->read_len = body_start ? strlen(body_start) : 0;
+    printf("sw_http_parse_request :: data: %s\n", c->read_buf);
 }
 
-void sw_http_handle_request(sw_connection_t *c) {
+void sw_http_handle_request(sw_connection *c) {
     if (!c->request) return;
     
     // For now, just send a basic response
     sw_http_reply(c, 200, "Content-Type: text/plain\r\n", "Hello from Syphax Web!");
 }
 
-i32 sw_http_reply(sw_connection_t *c, i32 status_code, const c8 *headers, const c8 *fmt, ...) {
+i32 sw_http_reply(sw_connection *c, i32 status_code, const c8 *headers, const c8 *fmt, ...) {
     c8 status_line[256];
     const c8 *status_text = "OK";
     
@@ -343,7 +434,7 @@ i32 sw_http_reply(sw_connection_t *c, i32 status_code, const c8 *headers, const 
     return 0;
 }
 
-i32 sw_printf(sw_connection_t *c, const c8 *fmt, ...) {
+i32 sw_printf(sw_connection *c, const c8 *fmt, ...) {
     c8 buf[4096];
     va_list ap;
     va_start(ap, fmt);
@@ -360,7 +451,7 @@ i32 sw_printf(sw_connection_t *c, const c8 *fmt, ...) {
     return len;
 }
 
-i32 sw_http_get_var(sw_http_message_t *hm, const c8 *name, c8 *buf, sz buf_len) {
+i32 sw_http_get_var(sw_http_message *hm, const c8 *name, c8 *buf, sz buf_len) {
     if (!hm->body) return -1;
     
     c8 *data = hm->body;
@@ -417,7 +508,7 @@ i32 sw_match(const c8 *pattern, const c8 *str) {
     return !*pattern && !*str;
 }
 
-i32 sw_http_serve_file(sw_connection_t *c, const c8 *path) {
+i32 sw_http_serve_file(sw_connection *c, const c8 *path) {
     struct stat st;
     if (stat(path, &st) != 0) {
         return sw_http_reply(c, 404, "Content-Type: text/plain\r\n", "File not found");
@@ -498,7 +589,7 @@ i32 sw_http_serve_file(sw_connection_t *c, const c8 *path) {
 }
 
 // TODO: Test this extensively
-i32 sw_http_next_multipart(sw_http_message_t *hm, sw_http_multipart_t *mp, sz *offset) {
+i32 sw_http_next_multipart(sw_http_message *hm, sw_http_multipart *mp, sz *offset) {
     if (!hm->body || !offset) return 0;
     
     c8 *boundary = NULL;

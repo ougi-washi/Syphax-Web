@@ -3,27 +3,34 @@
 #include "sw_server.h"
 #include "sw_html.h"
 
-#define SW_PORT 8000
-
-void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
-    if (strcmp(hm->method, "GET") == 0) {
-        if (strcmp(hm->uri, "/") == 0) {
-            c8* content = sw_init_html_buffer();
-            sw_html(content,
-                sw_head(content,
-                    sw_title(content, "Syphax-Web");
-                );
-                sw_body(content, attr(.id = "body", .class = "body"),
-                    sw_div(content, attr(.id = "content", .class = "content"),
-                        sw_h1(content, attr(), sw_append(content, "Syphax-Web"));
-                        sw_button(content, attr(.type = "button", .class = "btn btn-primary", .id = "button"), sw_append(content, "Click me!"));
-                        sw_script(content, attr(), "document.getElementById('button').onclick = function() { alert('Hello World!'); }");
-                        sw_img(content, attr(.src = "resources/syphax-web.png", .hidden = true));
-                    );
-                );
+void render_root(sw_connection *c) {
+    c8* content = sw_init_html_buffer();
+    sw_html(content,
+        sw_head(content,
+            sw_title(content, "Syphax-Web");
+        );
+        sw_body(content, attr(.id = "body", .class = "body"),
+            sw_div(content, attr(.id = "content", .class = "content"),
+                sw_h1(content, attr(), sw_append(content, "Syphax-Web"));
+                sw_button(content, attr(.type = "button", .class = "btn btn-primary", .id = "button"), sw_append(content, "Click me!"));
+                sw_script(content, attr(), "document.getElementById('button').onclick = function() { alert('Hello World!'); }");
+                sw_img(content, attr(.src = "resources/syphax-web.png", .hidden = true));
             );
-            sw_http_reply(c, 200, "", content);
-            sw_destroy_html_buffer(content);
+        );
+    );
+    sw_http_reply(c, 200, "", content);
+    sw_destroy_html_buffer(content);
+}
+
+void http_handler(sw_connection *c, sw_http_message *hm) {
+    printf("Handling request for %s\n", hm->uri);
+    if (strcmp(hm->method, "GET") == 0) {
+        //if (strstr(hm->uri, "/resources/")) {
+        //    printf("Serving file %s\n", hm->uri);
+        //    sw_http_serve_file(c, hm->uri);
+        //}
+        if (strcmp(hm->uri, "/") == 0) {
+            render_root(c);
         }
         else {
             sw_http_reply(c, 404, "Content-Type: text/plain\r\n", "Not Found");
@@ -35,27 +42,7 @@ void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
 }
 
 i32 main(i32 argc, c8** argv) {
-    sw_mgr_t mgr = {0};
-    if (sw_mgr_init(&mgr) != 0) {
-        fprintf(stderr, "Failed to initialize manager\n");
-        return 1;
-    }
-    
-    sw_mgr_set_http_handler(&mgr, http_handler);
-   
-    c8 broadcast_addr[256];
-    snprintf(broadcast_addr, sizeof(broadcast_addr), "http://0.0.0.0:%d", SW_PORT);
-
-    if (sw_http_listen(&mgr, broadcast_addr) != 0) {
-        fprintf(stderr, "Failed to listen on port %d\n", SW_PORT);
-        return 1;
-    }
-    
-    printf("Syphax Web Server running on http://localhost:%d\nPress Ctrl+C to stop\n", SW_PORT);
-    
-    while (1) {
-        sw_mgr_poll(&mgr, 1000);
-    }
-    
-    sw_mgr_free(&mgr);
+    sw_server_init(http_handler);
+    sw_server_listen("http://0.0.0.0:8000"); // This contains a loop until the server is stopped
+    sw_server_clear();
 }
