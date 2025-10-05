@@ -3,8 +3,10 @@
 #include "sw_server.h"
 #include "sw_html.h"
 
-void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
+#define SW_PORT 8000
 
+void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
+    printf("HTTP Request: %s %s\n", hm->method, hm->uri);
     if (strcmp(hm->method, "GET") == 0) {
         if (strcmp(hm->uri, "/") == 0) {
             c8* content = sw_init_html_buffer();
@@ -39,13 +41,16 @@ i32 main(i32 argc, c8** argv) {
     }
     
     sw_mgr_set_http_handler(&mgr, http_handler);
-    
-    if (sw_http_listen(&mgr, "http://0.0.0.0:8080") != 0) {
-        fprintf(stderr, "Failed to listen on port 8080\n");
+   
+    c8 broadcast_addr[256];
+    snprintf(broadcast_addr, sizeof(broadcast_addr), "http://0.0.0.0:%d", SW_PORT);
+
+    if (sw_http_listen(&mgr, broadcast_addr) != 0) {
+        fprintf(stderr, "Failed to listen on port %d\n", SW_PORT);
         return 1;
     }
     
-    printf("Syphax Web Server running on http://localhost:8080\n");
+    printf("Syphax Web Server running on http://localhost:%d\n", SW_PORT);
     printf("\nPress Ctrl+C to stop\n");
     
     while (1) {

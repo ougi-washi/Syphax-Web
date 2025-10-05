@@ -42,6 +42,7 @@ i32 sw_mgr_init(sw_mgr_t *mgr) {
     return 0;
 }
 
+// TODO: check https support
 i32 sw_http_listen(sw_mgr_t *mgr, const c8 *url) {
     c8 host[256];
     i32 port;
@@ -289,7 +290,6 @@ void sw_http_parse_request(sw_connection_t *c) {
 void sw_http_handle_request(sw_connection_t *c) {
     if (!c->request) return;
     
-    // This function should be called from sw.c with proper mgr context
     // For now, just send a basic response
     sw_http_reply(c, 200, "Content-Type: text/plain\r\n", "Hello from Syphax Web!");
 }
@@ -449,6 +449,14 @@ i32 sw_http_serve_file(sw_connection_t *c, const c8 *path) {
             content_type = "image/jpeg";
         } else if (strcasecmp(ext, ".gif") == 0) {
             content_type = "image/gif";
+        } else if (strcasecmp(ext, ".mp4") == 0) {
+            content_type = "video/mp4";
+        } else if (strcasecmp(ext, ".webm") == 0) {
+            content_type = "video/webm";
+        } else if (strcasecmp(ext, ".ogv") == 0) {
+            content_type = "video/ogg";
+        } else if (strcasecmp(ext, ".mp3") == 0) {
+            content_type = "audio/mpeg";
         } else if (strcasecmp(ext, ".txt") == 0) {
             content_type = "text/plain";
         }
