@@ -6,7 +6,6 @@
 #define SW_PORT 8000
 
 void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
-    printf("HTTP Request: %s %s\n", hm->method, hm->uri);
     if (strcmp(hm->method, "GET") == 0) {
         if (strcmp(hm->uri, "/") == 0) {
             c8* content = sw_init_html_buffer();
@@ -18,12 +17,14 @@ void http_handler(sw_connection_t *c, sw_http_message_t *hm) {
                     sw_div(content, attr(.id = "content", .class = "content"),
                         sw_h1(content, attr(), sw_append(content, "Syphax-Web"));
                         sw_button(content, attr(.type = "button", .class = "btn btn-primary", .id = "button"), sw_append(content, "Click me!"));
+                        sw_script(content, attr(), "document.getElementById('button').onclick = function() { alert('Hello World!'); }");
+                        sw_img(content, attr(.src = "resources/syphax-web.png", .hidden = true));
                     );
                 );
             );
             sw_http_reply(c, 200, "", content);
             sw_destroy_html_buffer(content);
-        } 
+        }
         else {
             sw_http_reply(c, 404, "Content-Type: text/plain\r\n", "Not Found");
         }
@@ -50,8 +51,7 @@ i32 main(i32 argc, c8** argv) {
         return 1;
     }
     
-    printf("Syphax Web Server running on http://localhost:%d\n", SW_PORT);
-    printf("\nPress Ctrl+C to stop\n");
+    printf("Syphax Web Server running on http://localhost:%d\nPress Ctrl+C to stop\n", SW_PORT);
     
     while (1) {
         sw_mgr_poll(&mgr, 1000);

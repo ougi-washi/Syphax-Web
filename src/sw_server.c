@@ -497,6 +497,7 @@ i32 sw_http_serve_file(sw_connection_t *c, const c8 *path) {
     return 0;
 }
 
+// TODO: Test this extensively
 i32 sw_http_next_multipart(sw_http_message_t *hm, sw_http_multipart_t *mp, sz *offset) {
     if (!hm->body || !offset) return 0;
     
