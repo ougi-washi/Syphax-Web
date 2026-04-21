@@ -5,6 +5,10 @@ project(syphax_web VERSION 0.1.0 LANGUAGES C)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/syphax/s_array.h")
+    message(FATAL_ERROR "Missing lib/syphax. Run: git submodule update --init --recursive")
+endif()
+
 option(SYPHAX_WEB_BUILD_EXAMPLES "Build syphax-web examples" OFF)
 option(SYPHAX_WEB_BUILD_TESTS "Build syphax-web tests" OFF)
 option(SYPHAX_WEB_ENABLE_WARNINGS "Enable compiler warnings" ON)

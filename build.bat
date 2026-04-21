@@ -1,6 +1,17 @@
 @echo off
 setlocal
 
+git submodule update --init --recursive
+if errorlevel 1 (
+  echo Failed to fetch lib/syphax submodule.
+  endlocal
+  exit /b 1
+)
+
+if exist build (
+  rmdir /s /q build
+)
+
 cmake -S . -B build ^
   -DCMAKE_BUILD_TYPE=Debug ^
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^

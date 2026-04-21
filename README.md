@@ -18,6 +18,12 @@ The project is packaged as a library first, with examples and tests as optional 
 
 ## Build
 
+Initialize the embedded dependency first:
+
+```bash
+git submodule update --init --recursive
+```
+
 Configure a development build with examples and tests:
 
 ```bash
@@ -90,6 +96,7 @@ With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `syphax_web_static_ex
 ## Notes
 
 - TLS, HTTP/2, and chunked-request decoding are not implemented in this version.
+- The source tree depends on `lib/syphax`; if it is missing, initialize submodules before configuring.
 - The live socket tests need permission to open localhost sockets if your sandbox blocks networking syscalls.
 
 ## License
