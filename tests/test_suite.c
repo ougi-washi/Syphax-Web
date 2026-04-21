@@ -322,10 +322,49 @@ static void test_live_server(void) {
     sw_mgr_destroy(mgr);
 }
 
-int main(void) {
-    test_translator();
-    test_html_builder();
-    test_request_helpers();
-    test_live_server();
+typedef void (*sw_test_fn)(void);
+
+typedef struct {
+    const char* name;
+    sw_test_fn fn;
+} sw_named_test;
+
+static const sw_named_test sw_named_tests[] = {
+    { "translator", test_translator },
+    { "html_builder", test_html_builder },
+    { "request_helpers", test_request_helpers },
+    { "live_server", test_live_server }
+};
+
+static int run_named_test(const char* name) {
+    sz i;
+
+    for (i = 0; i < sizeof(sw_named_tests) / sizeof(sw_named_tests[0]); ++i) {
+        if (strcmp(name, sw_named_tests[i].name) == 0) {
+            sw_named_tests[i].fn();
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "Unknown test '%s'\n", name);
+    fprintf(stderr, "Available tests:");
+    for (i = 0; i < sizeof(sw_named_tests) / sizeof(sw_named_tests[0]); ++i) {
+        fprintf(stderr, " %s", sw_named_tests[i].name);
+    }
+    fputc('\n', stderr);
+    return 1;
+}
+
+int main(int argc, char** argv) {
+    sz i;
+
+    if (argc > 1) {
+        return run_named_test(argv[1]);
+    }
+
+    for (i = 0; i < sizeof(sw_named_tests) / sizeof(sw_named_tests[0]); ++i) {
+        sw_named_tests[i].fn();
+    }
+
     return 0;
 }

@@ -119,7 +119,11 @@ if(SYPHAX_WEB_BUILD_TESTS)
             target_compile_options(syphax_web_tests PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
         endif()
     endif()
-    add_test(NAME syphax_web_tests COMMAND syphax_web_tests)
+    add_test(NAME syphax_web_tests_all COMMAND syphax_web_tests)
+    add_test(NAME syphax_web_tests_translator COMMAND syphax_web_tests translator)
+    add_test(NAME syphax_web_tests_html_builder COMMAND syphax_web_tests html_builder)
+    add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
+    add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
 endif()
 
 install(TARGETS syphax_web

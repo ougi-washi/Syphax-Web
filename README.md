@@ -32,12 +32,16 @@ cmake -S . -B build \
   -DSYPHAX_WEB_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
+./bin/syphax_web_tests
 ```
 
 Development executables are written to `bin/` in the repo root:
 
 - `bin/syphax_web_static`
 - `bin/syphax_web_tests`
+
+CTest only reads the configured build tree, not a test executable path.
+Use `ctest --test-dir build -VV` for CTest, or run `./bin/syphax_web_tests` directly.
 
 Build a library-only configuration:
 
