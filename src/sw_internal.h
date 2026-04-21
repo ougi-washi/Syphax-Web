@@ -9,6 +9,7 @@
 
 #include "syphax/s_array.h"
 #include "sw_html.h"
+#include "sw_js.h"
 #include "sw_server.h"
 #include "sw_translator.h"
 #include "sw_utility.h"
@@ -85,6 +86,8 @@ struct sw_translator {
 struct sw_html_buffer {
     sw_char_array bytes;
     const sw_translator* translator;
+    b8 html_doctype_emitted;
+    b8 js_runtime_emitted;
 };
 
 struct sw_listener {

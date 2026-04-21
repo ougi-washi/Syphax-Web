@@ -1,4 +1,5 @@
 #include "sw_html.h"
+#include "sw_js.h"
 #include "sw_server.h"
 #include "sw_translator.h"
 #include "sw_utility.h"
@@ -41,20 +42,41 @@ typedef SOCKET sw_test_socket;
 typedef int sw_test_socket;
 #endif
 
+static sz count_occurrences(const char* haystack, const char* needle) {
+    sz count = 0;
+    const char* cursor = haystack;
+    const sz needle_len = strlen(needle);
+
+    while (cursor != NULL && *cursor != '\0') {
+        cursor = strstr(cursor, needle);
+        if (cursor == NULL) {
+            break;
+        }
+        count += 1;
+        cursor += needle_len;
+    }
+
+    return count;
+}
+
 static void sw_test_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
     sw_test_server_state* state = (sw_test_server_state*)user_data;
-    char name[128];
+    char query[128];
 
     state->request_count += 1;
 
     if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/") == 0) {
         sw_html_buffer* html = sw_html_buffer_create();
-        sw_html_raw(html, "<!doctype html>");
         sw_html_open_tag(html, "html", NULL, 0);
         sw_html_open_tag(html, "body", NULL, 0);
         sw_html_open_tag(html, "h1", NULL, 0);
         sw_html_text(html, "Syphax Web");
         sw_html_close_tag(html, "h1");
+        sw_html_open_tag(html, "div", sw_html_attr_items(
+            sw_html_attr_kv("id", "sw-search-preview")
+        ));
+        sw_html_raw(html, "<section class=\"sw-preview-shell\"><p>Type to search.</p></section>");
+        sw_html_close_tag(html, "div");
         sw_html_close_tag(html, "body");
         sw_html_close_tag(html, "html");
         sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_html_buffer_data(html), sw_html_buffer_size(html));
@@ -63,8 +85,33 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     }
 
     if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/form") == 0) {
-        assert(sw_http_get_var(request, "name", name, sizeof(name)) > 0);
-        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "name=%s", name);
+        assert(sw_http_get_var(request, "name", query, sizeof(query)) > 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "name=%s", query);
+        return;
+    }
+
+    if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/") == 0) {
+        sw_html_buffer* html = sw_html_buffer_create();
+        assert(html != NULL);
+        assert(sw_http_get_var(request, "q", query, sizeof(query)) >= 0);
+        sw_html_open_tag(html, "html", NULL, 0);
+        sw_html_open_tag(html, "body", NULL, 0);
+        sw_html_open_tag(html, "div", sw_html_attr_items(
+            sw_html_attr_kv("id", "sw-search-preview")
+        ));
+        sw_html_open_tag(html, "section", sw_html_attr_items(
+            sw_html_attr_kv("class", "sw-preview-shell")
+        ));
+        sw_html_open_tag(html, "p", NULL, 0);
+        sw_html_text(html, query);
+        sw_html_close_tag(html, "p");
+        sw_html_close_tag(html, "section");
+        sw_html_close_tag(html, "div");
+        sw_html_close_tag(html, "body");
+        sw_html_close_tag(html, "html");
+        assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
+            sw_html_buffer_data(html), sw_html_buffer_size(html)) == 0);
+        sw_html_buffer_destroy(html);
         return;
     }
 
@@ -76,6 +123,39 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/style.css") == 0) {
         const c8 css[] = "body { color: #fff; }\n";
         assert(sw_http_reply(connection, 200, "text/css; charset=utf-8", css, sizeof(css) - 1) == 0);
+        return;
+    }
+
+    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/search-preview") == 0) {
+        sw_html_buffer* html = sw_html_buffer_create();
+        assert(html != NULL);
+        sw_html_open_tag(html, "section", sw_html_attr_items(
+            sw_html_attr_kv("class", "sw-preview-shell")
+        ));
+        sw_html_open_tag(html, "p", NULL, 0);
+        sw_html_text(html, "Type to search.");
+        sw_html_close_tag(html, "p");
+        sw_html_close_tag(html, "section");
+        assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
+            sw_html_buffer_data(html), sw_html_buffer_size(html)) == 0);
+        sw_html_buffer_destroy(html);
+        return;
+    }
+
+    if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/search-preview") == 0) {
+        sw_html_buffer* html = sw_html_buffer_create();
+        assert(html != NULL);
+        assert(sw_http_get_var(request, "q", query, sizeof(query)) >= 0);
+        sw_html_open_tag(html, "section", sw_html_attr_items(
+            sw_html_attr_kv("class", "sw-preview-shell")
+        ));
+        sw_html_open_tag(html, "p", NULL, 0);
+        sw_html_text(html, query);
+        sw_html_close_tag(html, "p");
+        sw_html_close_tag(html, "section");
+        assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
+            sw_html_buffer_data(html), sw_html_buffer_size(html)) == 0);
+        sw_html_buffer_destroy(html);
         return;
     }
 
@@ -95,6 +175,7 @@ static void test_translator(void) {
 static void test_html_builder_tag_api(void) {
     sw_translator* translator = sw_translator_create();
     sw_html_buffer* buffer = sw_html_buffer_create();
+    const c8* html;
 
     assert(sw_translator_set_language(translator, "fr"));
     sw_html_buffer_set_translator(buffer, translator);
@@ -116,6 +197,36 @@ static void test_html_builder_tag_api(void) {
     assert(strstr(sw_html_buffer_data(buffer), "value=\"&quot;quoted&quot;\"") != NULL);
     assert(strstr(sw_html_buffer_data(buffer), "&lt;safe &amp; sound&gt;") != NULL);
     assert(strstr(sw_html_buffer_data(buffer), "</input>") == NULL);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_html_open_tag(buffer, "HTML", NULL, 0));
+    assert(sw_html_close_tag(buffer, "HTML"));
+    html = sw_html_buffer_data(buffer);
+    assert(strstr(html, "<!doctype html><HTML>") != NULL);
+    assert(count_occurrences(html, "<!doctype html>") == 1);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_html_open_tag(buffer, "section", NULL, 0));
+    assert(sw_html_close_tag(buffer, "section"));
+    assert(strstr(sw_html_buffer_data(buffer), "<!doctype html>") == NULL);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_html_text(buffer, "prefix"));
+    assert(sw_html_open_tag(buffer, "html", NULL, 0));
+    assert(sw_html_close_tag(buffer, "html"));
+    html = sw_html_buffer_data(buffer);
+    assert(strstr(html, "<!doctype html>") == NULL);
+    assert(strstr(html, "prefix<html></html>") != NULL);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_html_open_tag(buffer, "html", NULL, 0));
+    assert(sw_html_close_tag(buffer, "html"));
+    assert(count_occurrences(sw_html_buffer_data(buffer), "<!doctype html>") == 1);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_html_open_tag(buffer, "html", NULL, 0));
+    assert(sw_html_close_tag(buffer, "html"));
+    assert(count_occurrences(sw_html_buffer_data(buffer), "<!doctype html>") == 1);
 
     sw_html_buffer_destroy(buffer);
     sw_translator_destroy(translator);
@@ -163,6 +274,90 @@ static void test_html_builder_attribute_api(void) {
 
     sw_html_buffer_destroy(buffer);
     sw_translator_destroy(translator);
+}
+
+static void test_js_emission(void) {
+    sw_html_buffer* buffer = sw_html_buffer_create();
+    const sw_js_live_search_options live_search = {
+        .form_id = "search-form",
+        .input_id = "search-input",
+        .target_id = "search-preview",
+        .endpoint = "/preview?label=quo\"te'\n</script>\\\\",
+        .value_param = "q",
+        .loading_class = "is-loading",
+        .debounce_ms = 150,
+        .method = SW_JS_HTTP_POST,
+        .swap_mode = SW_JS_SWAP_INNER_HTML,
+        .serialize_form = 1,
+        .abort_stale = 1,
+        .prevent_submit = 1
+    };
+    const sw_js_fetch_replace_options fetch_replace = {
+        .trigger_id = "refresh-button",
+        .form_id = "search-form",
+        .target_id = "results",
+        .endpoint = "/replace",
+        .loading_class = "loading-state",
+        .event_type = SW_JS_EVENT_CLICK,
+        .method = SW_JS_HTTP_GET,
+        .swap_mode = SW_JS_SWAP_OUTER_HTML,
+        .serialize_form = 1,
+        .abort_stale = 1,
+        .prevent_default = 1
+    };
+    const sw_js_toggle_options toggle = {
+        .trigger_id = "toggle-trigger",
+        .target_id = "toggle-target",
+        .event_type = SW_JS_EVENT_CHANGE,
+        .prevent_default = 0,
+        .sync_initial_state = 1,
+        .use_trigger_checked = 1,
+        .invert = 0
+    };
+    const sw_js_class_toggle_options class_toggle = {
+        .trigger_id = "class-trigger",
+        .target_id = "class-target",
+        .class_name = "is-active",
+        .event_type = SW_JS_EVENT_CLICK,
+        .prevent_default = 1,
+        .sync_initial_state = 0,
+        .use_trigger_checked = 0,
+        .invert = 1
+    };
+    const c8* html;
+
+    assert(buffer != NULL);
+    assert(sw_js_emit_runtime(buffer));
+    assert(sw_js_emit_runtime(buffer));
+    assert(sw_js_live_search(buffer, &live_search));
+    assert(sw_js_fetch_replace(buffer, &fetch_replace));
+    assert(sw_js_toggle(buffer, &toggle));
+    assert(sw_js_class_toggle(buffer, &class_toggle));
+
+    html = sw_html_buffer_data(buffer);
+    assert(count_occurrences(html, "data-swjs=\"runtime\"") == 1);
+    assert(count_occurrences(html, "data-swjs=\"live-search\"") == 1);
+    assert(count_occurrences(html, "data-swjs=\"fetch-replace\"") == 1);
+    assert(count_occurrences(html, "data-swjs=\"toggle\"") == 1);
+    assert(count_occurrences(html, "data-swjs=\"class-toggle\"") == 1);
+    assert(strstr(html, "window.__swjsRuntime.liveSearch(") != NULL);
+    assert(strstr(html, "\"debounceMs\":150") != NULL);
+    assert(strstr(html, "\"serializeForm\":true") != NULL);
+    assert(strstr(html, "\"abortStale\":true") != NULL);
+    assert(strstr(html, "\"preventSubmit\":true") != NULL);
+    assert(strstr(html, "\"swapMode\":1") != NULL);
+    assert(strstr(html, "\"eventType\":2") != NULL);
+    assert(strstr(html, "\"className\":\"is-active\"") != NULL);
+    assert(strstr(html, "\\\"") != NULL);
+    assert(strstr(html, "\\x27") != NULL);
+    assert(strstr(html, "\\n") != NULL);
+    assert(strstr(html, "\\\\") != NULL);
+    assert(strstr(html, "\\x3C/script>") != NULL);
+
+    sw_html_buffer_clear(buffer);
+    assert(sw_js_emit_runtime(buffer));
+    assert(count_occurrences(sw_html_buffer_data(buffer), "data-swjs=\"runtime\"") == 1);
+    sw_html_buffer_destroy(buffer);
 }
 
 static void test_request_helpers(void) {
@@ -354,6 +549,8 @@ static void test_live_server(void) {
     assert_complete_response(&response);
     assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
     assert(strstr(response.data, "<h1>Syphax Web</h1>") != NULL);
+    assert(strstr(response.data, "id=\"sw-search-preview\"") != NULL);
+    assert(strstr(response.data, "/example.js") == NULL);
     free(response.data);
 
     response = issue_request(mgr, port,
@@ -373,12 +570,45 @@ static void test_live_server(void) {
     assert(strstr(response.data, "body { color: #fff; }") != NULL);
     free(response.data);
 
+    response = issue_request(mgr, port, "GET /search-preview HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Content-Type: text/html; charset=utf-8") != NULL);
+    assert(strstr(response.data, "<!doctype html>") == NULL);
+    assert(strstr(response.data, "class=\"sw-preview-shell\"") != NULL);
+    assert(strstr(response.data, "Type to search.") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "POST /search-preview HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        "Content-Length: 10\r\n"
+        "\r\n"
+        "q=Language");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "<!doctype html>") == NULL);
+    assert(strstr(response.data, "<p>Language</p>") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "POST / HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        "Content-Length: 10\r\n"
+        "\r\n"
+        "q=Language");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "<!doctype html>") != NULL);
+    assert(strstr(response.data, "id=\"sw-search-preview\"") != NULL);
+    assert(strstr(response.data, "<p>Language</p>") != NULL);
+    free(response.data);
+
     response = issue_request(mgr, port, "GET /file HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "static payload") != NULL);
     free(response.data);
 
-    assert(state.request_count == 4);
+    assert(state.request_count == 7);
     remove(file_path);
     sw_mgr_destroy(mgr);
 }
@@ -394,6 +624,7 @@ static const sw_named_test sw_named_tests[] = {
     { "translator", test_translator },
     { "html_builder_tag_api", test_html_builder_tag_api },
     { "html_builder_attribute_api", test_html_builder_attribute_api },
+    { "js_emission", test_js_emission },
     { "request_helpers", test_request_helpers },
     { "live_server", test_live_server }
 };

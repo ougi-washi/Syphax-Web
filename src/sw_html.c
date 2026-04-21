@@ -1,5 +1,42 @@
 #include "sw_internal.h"
 
+static b8 sw_html_tag_is_root_html(const c8* tag) {
+    static const c8 html_tag[] = "html";
+    sz i;
+
+    if (tag == NULL) {
+        return 0;
+    }
+
+    for (i = 0; html_tag[i] != '\0'; ++i) {
+        if (tag[i] == '\0') {
+            return 0;
+        }
+        if (tolower((unsigned char)tag[i]) != html_tag[i]) {
+            return 0;
+        }
+    }
+
+    return tag[i] == '\0';
+}
+
+static b8 sw_html_maybe_emit_doctype(sw_html_buffer* buffer, const c8* tag) {
+    if (buffer == NULL || buffer->html_doctype_emitted || sw_char_array_size(&buffer->bytes) != 0) {
+        return 1;
+    }
+
+    if (!sw_html_tag_is_root_html(tag)) {
+        return 1;
+    }
+
+    if (!sw_char_array_append_cstr(&buffer->bytes, "<!doctype html>")) {
+        return 0;
+    }
+
+    buffer->html_doctype_emitted = 1;
+    return 1;
+}
+
 static b8 sw_html_append_escaped(sw_html_buffer* buffer, const c8* text, b8 attribute) {
     sz i;
 
@@ -107,6 +144,8 @@ void sw_html_buffer_clear(sw_html_buffer* buffer) {
         return;
     }
     sw_char_array_reset(&buffer->bytes);
+    buffer->html_doctype_emitted = 0;
+    buffer->js_runtime_emitted = 0;
 }
 
 void sw_html_buffer_set_translator(sw_html_buffer* buffer, const sw_translator* translator) {
@@ -141,6 +180,7 @@ b8 sw_html_open_tag(sw_html_buffer* buffer, const c8* tag, const sw_html_attr_it
     if (buffer == NULL || tag == NULL) {
         return 0;
     }
+    if (!sw_html_maybe_emit_doctype(buffer, tag)) return 0;
     if (!sw_char_array_append_byte(&buffer->bytes, '<')) return 0;
     if (!sw_char_array_append_cstr(&buffer->bytes, tag)) return 0;
     if (!sw_html_append_attr_items(buffer, attrs, attr_count)) return 0;

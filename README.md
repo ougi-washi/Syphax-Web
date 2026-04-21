@@ -4,6 +4,7 @@ Syphax-Web is a small C web library built around two reusable pieces:
 
 - An embeddable HTTP server API with explicit manager lifecycle.
 - An HTML/translation helper for safe server-side markup generation.
+- An inline JavaScript helper layer for common DOM and request behaviors.
 
 The project is packaged as a library first, with examples and tests as optional targets.
 
@@ -13,6 +14,7 @@ The project is packaged as a library first, with examples and tests as optional 
 - Linux `epoll` backend and Windows `WSAPoll` backend
 - Platform-neutral public headers directly under `include/`
 - Safe growable HTML builder with escaping
+- Shared inline JS runtime with reusable behavior helpers
 - Explicit translator context instead of global header state
 - Internal dynamic storage powered by the vendored `lib/syphax` submodule
 
@@ -75,6 +77,7 @@ target_link_libraries(my_target PRIVATE syphax_web::syphax_web)
 
 ```c
 #include "sw_html.h"
+#include "sw_js.h"
 #include "sw_server.h"
 
 static void handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
@@ -82,7 +85,6 @@ static void handler(sw_connection* connection, const sw_http_message* request, v
     (void)user_data;
 
     sw_html_buffer* html = sw_html_buffer_create();
-    sw_html_raw(html, "<!doctype html>");
     sw_html_open_tag(html, "html", sw_html_attr_items(
         sw_html_attr_kv("lang", "en"),
         sw_html_attr_kv("data-app", "demo")
@@ -113,23 +115,53 @@ When you bind to `0.0.0.0`, open `http://127.0.0.1:8000` or your machine's actua
 - Use one small C function per page fragment instead of building one giant render function.
 - Use `sw_html_text()` for escaped text and `sw_html_text_tr()` when you want translation too.
 - Use `sw_html_open_tag()` and `sw_html_void_tag()` with `sw_html_attr_items(...)` for custom `data-*`, `aria-*`, and boolean attributes.
+- Use `sw_js_*()` helpers to emit common browser behavior inline without maintaining a separate asset for routine interactions.
 - Keep HTTP response writing separate from HTML generation.
 
 ```c
 static void render_search_panel(sw_html_buffer* html) {
+    const sw_js_live_search_options live_search = {
+        .form_id = "search-form",
+        .input_id = "search-input",
+        .target_id = "search-preview",
+        .endpoint = "/search-preview",
+        .value_param = "q",
+        .loading_class = "is-loading",
+        .debounce_ms = 120,
+        .method = SW_JS_HTTP_POST,
+        .swap_mode = SW_JS_SWAP_INNER_HTML,
+        .serialize_form = 1,
+        .abort_stale = 1,
+        .prevent_submit = 1
+    };
+
     sw_html_open_tag(html, "section", sw_html_attr_items(
         sw_html_attr_kv("class", "panel"),
         sw_html_attr_kv("data-component", "search-panel")
+    ));
+    sw_html_open_tag(html, "form", sw_html_attr_items(
+        sw_html_attr_kv("id", "search-form"),
+        sw_html_attr_kv("action", "/"),
+        sw_html_attr_kv("method", "post")
     ));
     sw_html_open_tag(html, "h2", NULL, 0);
     sw_html_text_tr(html, "Search");
     sw_html_close_tag(html, "h2");
     sw_html_void_tag(html, "input", sw_html_attr_items(
+        sw_html_attr_kv("id", "search-input"),
         sw_html_attr_kv("type", "text"),
+        sw_html_attr_kv("name", "q"),
         sw_html_attr_kv_tr("placeholder", "Search"),
         sw_html_attr_bool("disabled", 0)
     ));
+    sw_html_open_tag(html, "div", sw_html_attr_items(
+        sw_html_attr_kv("id", "search-preview")
+    ));
+    sw_html_close_tag(html, "div");
+    sw_html_close_tag(html, "form");
     sw_html_close_tag(html, "section");
+
+    sw_js_live_search(html, &live_search);
 }
 ```
 
@@ -138,7 +170,8 @@ static void render_search_panel(sw_html_buffer* html) {
 With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `bin/syphax_web_static`, which serves:
 
 - `/` with HTML generated through the builder API
-- `/style.css` from `resources/style.css`, with a built-in fallback so the example still works outside the repo root
+- `/style.css` directly from `resources/style.css`
+- `/search-preview`, which returns an HTML fragment that the root page swaps into an inline preview div on each character input
 
 ## Notes
 

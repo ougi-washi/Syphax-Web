@@ -38,6 +38,7 @@ set(SYPHAX_WEB_PUBLIC_HEADERS
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_utility.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_translator.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_html.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_js.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_server.h
 )
 
@@ -55,6 +56,7 @@ set(SYPHAX_WEB_SOURCES
     ${SYPHAX_WEB_SRC_DIR}/sw_utility.c
     ${SYPHAX_WEB_SRC_DIR}/sw_translator.c
     ${SYPHAX_WEB_SRC_DIR}/sw_html.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_js.c
     ${SYPHAX_WEB_SRC_DIR}/sw_server.c
 )
 
@@ -141,6 +143,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_test(NAME syphax_web_tests_translator COMMAND syphax_web_tests translator)
     add_test(NAME syphax_web_tests_html_builder_tag_api COMMAND syphax_web_tests html_builder_tag_api)
     add_test(NAME syphax_web_tests_html_builder_attribute_api COMMAND syphax_web_tests html_builder_attribute_api)
+    add_test(NAME syphax_web_tests_js_emission COMMAND syphax_web_tests js_emission)
     add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
     add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
 endif()
