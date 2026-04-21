@@ -38,7 +38,7 @@ Configure a development build with examples and tests:
 cmake -S . -B build \
   -DSYPHAX_WEB_BUILD_EXAMPLES=ON \
   -DSYPHAX_WEB_BUILD_TESTS=ON
-cmake --build build
+cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 ctest --test-dir build --output-on-failure
 ./bin/syphax_web_tests
 ```
@@ -55,14 +55,14 @@ Build a library-only configuration:
 
 ```bash
 cmake -S . -B build
-cmake --build build
+cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 ```
 
 Install the package:
 
 ```bash
 cmake -S . -B build
-cmake --build build
+cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
 cmake --install build --prefix /your/prefix
 ```
 

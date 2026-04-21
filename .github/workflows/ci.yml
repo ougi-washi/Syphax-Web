@@ -36,7 +36,7 @@ jobs:
           -DSYPHAX_WEB_ENABLE_WARNINGS=ON
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel "$(nproc)"
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
@@ -77,7 +77,7 @@ jobs:
           -DSYPHAX_WEB_ENABLE_WARNINGS=ON
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel "$(nproc)"
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
