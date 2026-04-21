@@ -1,57 +1,139 @@
-# Syphax-Web - Ougi Washi
+cmake_minimum_required(VERSION 3.22)
 
-## General
-cmake_minimum_required(VERSION 3.22.1)
+project(syphax_web VERSION 0.1.0 LANGUAGES C)
 
-project(SYPHAX_WEB LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 20)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-if(NOT CMAKE_GENERATOR)
-    find_program(NINJA_EXECUTABLE ninja)
-    if(NINJA_EXECUTABLE)
-        set(CMAKE_GENERATOR "Ninja" CACHE INTERNAL "Ninja")
-        message(STATUS "Ninja build system found. Using Ninja generator.")
+option(SYPHAX_WEB_BUILD_EXAMPLES "Build syphax-web examples" OFF)
+option(SYPHAX_WEB_BUILD_TESTS "Build syphax-web tests" OFF)
+option(SYPHAX_WEB_ENABLE_WARNINGS "Enable compiler warnings" ON)
+
+set(SYPHAX_WEB_PUBLIC_HEADERS
+    include/syphax/web/sw_export.h
+    include/syphax/web/sw_types.h
+    include/syphax/web/sw_utility.h
+    include/syphax/web/sw_translator.h
+    include/syphax/web/sw_html.h
+    include/syphax/web/sw_server.h
+)
+
+set(SYPHAX_WEB_SOURCES
+    src/sw_utility.c
+    src/sw_translator.c
+    src/sw_html.c
+    src/sw_server.c
+)
+
+if(WIN32)
+    list(APPEND SYPHAX_WEB_SOURCES src/sw_backend_wsapoll.c)
+else()
+    list(APPEND SYPHAX_WEB_SOURCES src/sw_backend_epoll.c)
+endif()
+
+add_library(syphax_web ${SYPHAX_WEB_SOURCES} ${SYPHAX_WEB_PUBLIC_HEADERS})
+add_library(syphax_web::syphax_web ALIAS syphax_web)
+
+target_compile_features(syphax_web PUBLIC c_std_11)
+
+target_include_directories(syphax_web
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(syphax_web PRIVATE SYPHAX_WEB_BUILDING_LIBRARY)
+
+if(BUILD_SHARED_LIBS)
+    target_compile_definitions(syphax_web PUBLIC SYPHAX_WEB_SHARED_BUILD)
+endif()
+
+if(WIN32)
+    target_link_libraries(syphax_web PUBLIC ws2_32)
+endif()
+
+if(SYPHAX_WEB_ENABLE_WARNINGS)
+    if(MSVC)
+        target_compile_options(syphax_web PRIVATE /W4)
     else()
-        message(STATUS "Ninja build system not found. Using default generator.")
+        target_compile_options(syphax_web PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
     endif()
 endif()
 
-# Directory setup
-set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
-set(RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
-set(EXAMPLES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+set_target_properties(syphax_web PROPERTIES
+    OUTPUT_NAME syphax_web
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
 
-# setup library macro
-macro(setup_library arg_lib_name arg_source_path arg_include_path)
-	message(STATUS "Adding ${arg_lib_name}")
-	file(GLOB CURRENT_SRC_FILES	"${arg_source_path}/*.c" 
-					"${arg_source_path}/*.cpp"
-					"${arg_source_path}/**/*.c" 
-					"${arg_source_path}/**/*.cpp")
-	add_library(${arg_lib_name} STATIC ${CURRENT_SRC_FILES})
-	target_include_directories(${arg_lib_name} PUBLIC ${arg_include_path})
-endmacro()
+if(SYPHAX_WEB_BUILD_EXAMPLES)
+    add_executable(syphax_web_static_example examples/static.c)
+    target_link_libraries(syphax_web_static_example PRIVATE syphax_web::syphax_web)
+    target_compile_features(syphax_web_static_example PRIVATE c_std_11)
+    if(SYPHAX_WEB_ENABLE_WARNINGS)
+        if(MSVC)
+            target_compile_options(syphax_web_static_example PRIVATE /W4)
+        else()
+            target_compile_options(syphax_web_static_example PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+        endif()
+    endif()
+endif()
 
-# Main module
-set(MAIN_MODULE_INCLUDES ${SRC_DIR} ${LIB_DIR})
-setup_library(main ${SRC_DIR} "${MAIN_MODULE_INCLUDES}")
+if(SYPHAX_WEB_BUILD_TESTS)
+    enable_testing()
+    add_executable(syphax_web_tests tests/test_suite.c)
+    target_link_libraries(syphax_web_tests PRIVATE syphax_web::syphax_web)
+    target_compile_features(syphax_web_tests PRIVATE c_std_11)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(syphax_web_tests PRIVATE pthread)
+    endif()
+    if(SYPHAX_WEB_ENABLE_WARNINGS)
+        if(MSVC)
+            target_compile_options(syphax_web_tests PRIVATE /W4)
+        else()
+            target_compile_options(syphax_web_tests PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+        endif()
+    endif()
+    add_test(NAME syphax_web_tests COMMAND syphax_web_tests)
+endif()
 
-# setup executable macro
-macro(setup_executable arg_exec_dir arg_exec_name modules)
-    message(STATUS "Generating executable ${arg_exec_name}")
-    add_executable(${arg_exec_name} "${arg_exec_dir}/${arg_exec_name}.c")
-    target_link_libraries(${arg_exec_name} PUBLIC ${modules})
-    target_compile_definitions(${arg_exec_name} PUBLIC SW_RESOURCES_DIR="${RESOURCES_DIR}/")
-    set_target_properties(${arg_exec_name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
-endmacro()
+install(TARGETS syphax_web
+    EXPORT syphax_webTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
 
-file(GLOB EXAMPLES 	"${EXAMPLES_DIR}/*.c" 
-			"${EXAMPLES_DIR}/*.cpp"
-			"${EXAMPLES_DIR}/**/*.c" 
-			"${EXAMPLES_DIR}/**/*.cpp")
+install(DIRECTORY include/syphax DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES
+    lib/syphax/s_types.h
+    lib/syphax/s_array.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/syphax
+)
 
-foreach(EXAMPLE ${EXAMPLES})
-   	get_filename_component(EXAMPLE_NAME ${EXAMPLE} NAME_WE)
-   	message(STATUS "Adding example ${EXAMPLE_NAME}")
-    setup_executable(${EXAMPLES_DIR} ${EXAMPLE_NAME} main)
-endforeach()
+configure_package_config_file(
+    cmake/syphax_webConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/syphax_webConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/syphax_web
+)
+
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/syphax_webConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(EXPORT syphax_webTargets
+    FILE syphax_webTargets.cmake
+    NAMESPACE syphax_web::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/syphax_web
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/syphax_webConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/syphax_webConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/syphax_web
+)
