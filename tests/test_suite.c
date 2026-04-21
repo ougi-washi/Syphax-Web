@@ -1,7 +1,7 @@
-#include "syphax/web/sw_html.h"
-#include "syphax/web/sw_server.h"
-#include "syphax/web/sw_translator.h"
-#include "syphax/web/sw_utility.h"
+#include "sw_html.h"
+#include "sw_server.h"
+#include "sw_translator.h"
+#include "sw_utility.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -50,9 +50,9 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/") == 0) {
         sw_html_buffer* html = sw_html_buffer_create();
         sw_html_raw(html, "<!doctype html>");
-        sw_html_open_tag(html, "html", NULL);
-        sw_html_open_tag(html, "body", NULL);
-        sw_html_open_tag(html, "h1", NULL);
+        sw_html_open_tag(html, "html", NULL, 0);
+        sw_html_open_tag(html, "body", NULL, 0);
+        sw_html_open_tag(html, "h1", NULL, 0);
         sw_html_text(html, "Syphax Web");
         sw_html_close_tag(html, "h1");
         sw_html_close_tag(html, "body");
@@ -92,22 +92,74 @@ static void test_translator(void) {
     sw_translator_destroy(translator);
 }
 
-static void test_html_builder(void) {
+static void test_html_builder_tag_api(void) {
     sw_translator* translator = sw_translator_create();
     sw_html_buffer* buffer = sw_html_buffer_create();
 
     assert(sw_translator_set_language(translator, "fr"));
     sw_html_buffer_set_translator(buffer, translator);
 
-    assert(sw_html_open_tag(buffer, "div", &sw_html_attr(.class_name = "shell", .title = "Search")));
-    assert(sw_html_void_tag(buffer, "input", &sw_html_attr(.type = "text", .placeholder = "Search", .value = "\"quoted\"")));
-    assert(sw_html_text(buffer, "<safe & sound>"));
+    assert(sw_html_open_tag(buffer, "div", sw_html_attr_items(
+        sw_html_attr_kv("class", "shell"),
+        sw_html_attr_kv_tr("title", "Search")
+    )));
+    assert(sw_html_void_tag(buffer, "input", sw_html_attr_items(
+        sw_html_attr_kv("type", "text"),
+        sw_html_attr_kv_tr("placeholder", "Search"),
+        sw_html_attr_kv("value", "\"quoted\"")
+    )));
+    assert(sw_html_text_tr(buffer, "<safe & sound>"));
     assert(sw_html_close_tag(buffer, "div"));
 
     assert(strstr(sw_html_buffer_data(buffer), "title=\"Rechercher\"") != NULL);
     assert(strstr(sw_html_buffer_data(buffer), "placeholder=\"Rechercher\"") != NULL);
     assert(strstr(sw_html_buffer_data(buffer), "value=\"&quot;quoted&quot;\"") != NULL);
     assert(strstr(sw_html_buffer_data(buffer), "&lt;safe &amp; sound&gt;") != NULL);
+    assert(strstr(sw_html_buffer_data(buffer), "</input>") == NULL);
+
+    sw_html_buffer_destroy(buffer);
+    sw_translator_destroy(translator);
+}
+
+static void test_html_builder_attribute_api(void) {
+    sw_translator* translator = sw_translator_create();
+    sw_html_buffer* buffer = sw_html_buffer_create();
+    const c8* html;
+
+    assert(sw_translator_set_language(translator, "fr"));
+    sw_html_buffer_set_translator(buffer, translator);
+
+    assert(sw_html_title(buffer, "Search"));
+    assert(sw_html_title_tr(buffer, "Search"));
+    assert(sw_html_open_tag(buffer, "section", sw_html_attr_items(
+        sw_html_attr_kv("class", "shell"),
+        sw_html_attr_kv("data-mode", "demo"),
+        sw_html_attr_kv_tr("data-label", "Search"),
+        sw_html_attr_bool("hidden", 1),
+        sw_html_attr_bool("selected", 1)
+    )));
+    assert(sw_html_void_tag(buffer, "input", sw_html_attr_items(
+        sw_html_attr_kv("type", "text"),
+        sw_html_attr_kv_tr("placeholder", "Search"),
+        sw_html_attr_kv("data-role", "search"),
+        sw_html_attr_bool("disabled", 1)
+    )));
+    assert(sw_html_text(buffer, "Search"));
+    assert(sw_html_text_tr(buffer, "Search"));
+    assert(sw_html_close_tag(buffer, "section"));
+
+    html = sw_html_buffer_data(buffer);
+    assert(strstr(html, "<title>Search</title>") != NULL);
+    assert(strstr(html, "<title>Rechercher</title>") != NULL);
+    assert(strstr(html, "data-mode=\"demo\"") != NULL);
+    assert(strstr(html, "data-label=\"Rechercher\"") != NULL);
+    assert(strstr(html, "placeholder=\"Rechercher\"") != NULL);
+    assert(strstr(html, "data-role=\"search\"") != NULL);
+    assert(strstr(html, "hidden") != NULL);
+    assert(strstr(html, "selected") != NULL);
+    assert(strstr(html, "disabled") != NULL);
+    assert(strstr(html, "</input>") == NULL);
+    assert(strstr(html, "SearchRechercher") != NULL);
 
     sw_html_buffer_destroy(buffer);
     sw_translator_destroy(translator);
@@ -275,7 +327,16 @@ static void test_live_server(void) {
     assert(mgr != NULL);
 
     assert(sw_generate_unique_filename("fixture.txt", file_name, sizeof(file_name)));
-    snprintf(file_path, sizeof(file_path), "%s", file_name);
+#ifdef _WIN32
+    {
+        DWORD temp_dir_len = GetTempPathA((DWORD)sizeof(file_path), file_path);
+        assert(temp_dir_len > 0);
+        assert(temp_dir_len < sizeof(file_path));
+        assert(snprintf(file_path + temp_dir_len, sizeof(file_path) - (sz)temp_dir_len, "%s", file_name) > 0);
+    }
+#else
+    assert(snprintf(file_path, sizeof(file_path), "/tmp/%s", file_name) > 0);
+#endif
     file = fopen(file_path, "wb");
     assert(file != NULL);
     fputs("static payload", file);
@@ -331,7 +392,8 @@ typedef struct {
 
 static const sw_named_test sw_named_tests[] = {
     { "translator", test_translator },
-    { "html_builder", test_html_builder },
+    { "html_builder_tag_api", test_html_builder_tag_api },
+    { "html_builder_attribute_api", test_html_builder_attribute_api },
     { "request_helpers", test_request_helpers },
     { "live_server", test_live_server }
 };

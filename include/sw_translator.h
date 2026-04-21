@@ -1,8 +1,8 @@
 #ifndef SW_TRANSLATOR_H
 #define SW_TRANSLATOR_H
 
-#include "syphax/web/sw_export.h"
-#include "syphax/web/sw_types.h"
+#include "sw_export.h"
+#include "syphax/s_types.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -70,6 +70,26 @@ p{
   max-width:56ch;
 }
 
+.sw-list{
+  margin:0;
+  padding-left:18px;
+  color:var(--muted);
+}
+
+.sw-list li + li{
+  margin-top:10px;
+}
+
+.sw-list strong{
+  display:block;
+  margin-bottom:2px;
+  color:var(--text);
+  font-family:var(--font-mono);
+  font-size:0.82rem;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+}
+
 input[type="text"]{
   width:100%;
   min-height:46px;

@@ -5,7 +5,12 @@ project(syphax_web VERSION 0.1.0 LANGUAGES C)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/syphax/s_array.h")
+set(SYPHAX_WEB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(SYPHAX_WEB_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+set(SYPHAX_WEB_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+set(SYPHAX_WEB_SYPHAX_DIR "${SYPHAX_WEB_VENDOR_DIR}/syphax")
+
+if(NOT EXISTS "${SYPHAX_WEB_SYPHAX_DIR}/s_array.h")
     message(FATAL_ERROR "Missing lib/syphax. Run: git submodule update --init --recursive")
 endif()
 
@@ -29,39 +34,48 @@ function(syphax_web_set_runtime_output target)
 endfunction()
 
 set(SYPHAX_WEB_PUBLIC_HEADERS
-    include/syphax/web/sw_export.h
-    include/syphax/web/sw_types.h
-    include/syphax/web/sw_utility.h
-    include/syphax/web/sw_translator.h
-    include/syphax/web/sw_html.h
-    include/syphax/web/sw_server.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_export.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_utility.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_translator.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_html.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_server.h
+)
+
+set(SYPHAX_WEB_PRIVATE_HEADERS
+    ${SYPHAX_WEB_SRC_DIR}/sw_backend.h
+    ${SYPHAX_WEB_SRC_DIR}/sw_internal.h
+)
+
+set(SYPHAX_WEB_VENDOR_HEADERS
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
 )
 
 set(SYPHAX_WEB_SOURCES
-    src/sw_utility.c
-    src/sw_translator.c
-    src/sw_html.c
-    src/sw_server.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_utility.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_translator.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_html.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_server.c
 )
 
 if(WIN32)
-    list(APPEND SYPHAX_WEB_SOURCES src/sw_backend_wsapoll.c)
+    list(APPEND SYPHAX_WEB_SOURCES ${SYPHAX_WEB_SRC_DIR}/sw_backend_wsapoll.c)
 else()
-    list(APPEND SYPHAX_WEB_SOURCES src/sw_backend_epoll.c)
+    list(APPEND SYPHAX_WEB_SOURCES ${SYPHAX_WEB_SRC_DIR}/sw_backend_epoll.c)
 endif()
 
-add_library(syphax_web ${SYPHAX_WEB_SOURCES} ${SYPHAX_WEB_PUBLIC_HEADERS})
+add_library(syphax_web ${SYPHAX_WEB_SOURCES} ${SYPHAX_WEB_PUBLIC_HEADERS} ${SYPHAX_WEB_PRIVATE_HEADERS})
 add_library(syphax_web::syphax_web ALIAS syphax_web)
 
 target_compile_features(syphax_web PUBLIC c_std_11)
 
 target_include_directories(syphax_web
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib>
+        $<BUILD_INTERFACE:${SYPHAX_WEB_INCLUDE_DIR}>
+        $<BUILD_INTERFACE:${SYPHAX_WEB_VENDOR_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${SYPHAX_WEB_SRC_DIR}
 )
 
 target_compile_definitions(syphax_web PRIVATE SYPHAX_WEB_BUILDING_LIBRARY)
@@ -87,6 +101,10 @@ set_target_properties(syphax_web PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
 )
+
+source_group(TREE "${SYPHAX_WEB_INCLUDE_DIR}" PREFIX "include" FILES ${SYPHAX_WEB_PUBLIC_HEADERS})
+source_group(TREE "${SYPHAX_WEB_SRC_DIR}" PREFIX "src" FILES ${SYPHAX_WEB_PRIVATE_HEADERS} ${SYPHAX_WEB_SOURCES})
+source_group(TREE "${SYPHAX_WEB_VENDOR_DIR}" PREFIX "lib" FILES ${SYPHAX_WEB_VENDOR_HEADERS})
 
 if(SYPHAX_WEB_BUILD_EXAMPLES)
     add_executable(syphax_web_static_example examples/static.c)
@@ -121,7 +139,8 @@ if(SYPHAX_WEB_BUILD_TESTS)
     endif()
     add_test(NAME syphax_web_tests_all COMMAND syphax_web_tests)
     add_test(NAME syphax_web_tests_translator COMMAND syphax_web_tests translator)
-    add_test(NAME syphax_web_tests_html_builder COMMAND syphax_web_tests html_builder)
+    add_test(NAME syphax_web_tests_html_builder_tag_api COMMAND syphax_web_tests html_builder_tag_api)
+    add_test(NAME syphax_web_tests_html_builder_attribute_api COMMAND syphax_web_tests html_builder_attribute_api)
     add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
     add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
 endif()
@@ -133,10 +152,10 @@ install(TARGETS syphax_web
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(DIRECTORY include/syphax DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${SYPHAX_WEB_PUBLIC_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES
-    lib/syphax/s_types.h
-    lib/syphax/s_array.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/syphax
 )
 

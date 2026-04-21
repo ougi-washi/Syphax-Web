@@ -41,66 +41,46 @@ static b8 sw_html_append_escaped(sw_html_buffer* buffer, const c8* text, b8 attr
     return 1;
 }
 
-static b8 sw_html_append_attribute(sw_html_buffer* buffer, const c8* name, const c8* value, b8 translate) {
-    const c8* final_value = value;
+static b8 sw_html_append_attr_item(sw_html_buffer* buffer, const sw_html_attr_item* attr) {
+    const c8* value;
 
+    if (attr == NULL || attr->name == NULL || attr->name[0] == '\0' || !attr->enabled) {
+        return 1;
+    }
+
+    if (attr->is_boolean) {
+        if (!sw_char_array_append_byte(&buffer->bytes, ' ')) return 0;
+        return sw_char_array_append_cstr(&buffer->bytes, attr->name);
+    }
+
+    value = attr->value;
     if (value == NULL || value[0] == '\0') {
         return 1;
     }
 
-    if (translate) {
-        final_value = sw_translate(buffer->translator, value);
+    if (attr->translate) {
+        value = sw_translate(buffer->translator, value);
     }
 
     if (!sw_char_array_append_byte(&buffer->bytes, ' ')) return 0;
-    if (!sw_char_array_append_cstr(&buffer->bytes, name)) return 0;
+    if (!sw_char_array_append_cstr(&buffer->bytes, attr->name)) return 0;
     if (!sw_char_array_append_cstr(&buffer->bytes, "=\"")) return 0;
-    if (!sw_html_append_escaped(buffer, final_value, 1)) return 0;
+    if (!sw_html_append_escaped(buffer, value, 1)) return 0;
     return sw_char_array_append_byte(&buffer->bytes, '"');
 }
 
-static b8 sw_html_append_boolean(sw_html_buffer* buffer, const c8* name, b8 enabled) {
-    if (!enabled) {
-        return 1;
-    }
-    if (!sw_char_array_append_byte(&buffer->bytes, ' ')) return 0;
-    return sw_char_array_append_cstr(&buffer->bytes, name);
-}
+static b8 sw_html_append_attr_items(sw_html_buffer* buffer, const sw_html_attr_item* attrs, sz attr_count) {
+    sz i;
 
-static b8 sw_html_append_attributes(sw_html_buffer* buffer, const sw_html_tag_attributes* attrs) {
-    if (attrs == NULL) {
+    if (attrs == NULL || attr_count == 0) {
         return 1;
     }
 
-    if (!sw_html_append_attribute(buffer, "id", attrs->id, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "class", attrs->class_name, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "name", attrs->name, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "rel", attrs->rel, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "placeholder", attrs->placeholder, 1)) return 0;
-    if (!sw_html_append_attribute(buffer, "type", attrs->type, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "value", attrs->value, 1)) return 0;
-    if (!sw_html_append_attribute(buffer, "enctype", attrs->enctype, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "for", attrs->label_for, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "method", attrs->method, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "action", attrs->action, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "rows", attrs->rows, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "cols", attrs->cols, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "href", attrs->href, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "target", attrs->target, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "src", attrs->src, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "onclick", attrs->onclick, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "width", attrs->width, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "height", attrs->height, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "frameborder", attrs->frameborder, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "charset", attrs->charset, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "content", attrs->content, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "lang", attrs->lang, 0)) return 0;
-    if (!sw_html_append_attribute(buffer, "title", attrs->title, 1)) return 0;
-    if (!sw_html_append_boolean(buffer, "checked", attrs->checked)) return 0;
-    if (!sw_html_append_boolean(buffer, "controls", attrs->controls)) return 0;
-    if (!sw_html_append_boolean(buffer, "hidden", attrs->hidden)) return 0;
-    if (!sw_html_append_boolean(buffer, "defer", attrs->defer_script)) return 0;
-    if (!sw_html_append_boolean(buffer, "async", attrs->async_script)) return 0;
+    for (i = 0; i < attr_count; ++i) {
+        if (!sw_html_append_attr_item(buffer, &attrs[i])) {
+            return 0;
+        }
+    }
 
     return 1;
 }
@@ -157,13 +137,13 @@ sz sw_html_buffer_size(const sw_html_buffer* buffer) {
     return sw_char_array_size(&buffer->bytes);
 }
 
-b8 sw_html_open_tag(sw_html_buffer* buffer, const c8* tag, const sw_html_tag_attributes* attrs) {
+b8 sw_html_open_tag(sw_html_buffer* buffer, const c8* tag, const sw_html_attr_item* attrs, sz attr_count) {
     if (buffer == NULL || tag == NULL) {
         return 0;
     }
     if (!sw_char_array_append_byte(&buffer->bytes, '<')) return 0;
     if (!sw_char_array_append_cstr(&buffer->bytes, tag)) return 0;
-    if (!sw_html_append_attributes(buffer, attrs)) return 0;
+    if (!sw_html_append_attr_items(buffer, attrs, attr_count)) return 0;
     return sw_char_array_append_byte(&buffer->bytes, '>');
 }
 
@@ -176,11 +156,18 @@ b8 sw_html_close_tag(sw_html_buffer* buffer, const c8* tag) {
     return sw_char_array_append_byte(&buffer->bytes, '>');
 }
 
-b8 sw_html_void_tag(sw_html_buffer* buffer, const c8* tag, const sw_html_tag_attributes* attrs) {
-    return sw_html_open_tag(buffer, tag, attrs);
+b8 sw_html_void_tag(sw_html_buffer* buffer, const c8* tag, const sw_html_attr_item* attrs, sz attr_count) {
+    return sw_html_open_tag(buffer, tag, attrs, attr_count);
 }
 
 b8 sw_html_text(sw_html_buffer* buffer, const c8* text) {
+    if (buffer == NULL) {
+        return 0;
+    }
+    return sw_html_append_escaped(buffer, text, 0);
+}
+
+b8 sw_html_text_tr(sw_html_buffer* buffer, const c8* text) {
     if (buffer == NULL) {
         return 0;
     }
@@ -209,12 +196,17 @@ b8 sw_html_rawf(sw_html_buffer* buffer, const c8* fmt, ...) {
 }
 
 b8 sw_html_title(sw_html_buffer* buffer, const c8* text) {
-    if (!sw_html_open_tag(buffer, "title", NULL)) return 0;
+    if (!sw_html_open_tag(buffer, "title", NULL, 0)) return 0;
     if (!sw_html_text(buffer, text)) return 0;
     return sw_html_close_tag(buffer, "title");
 }
 
+b8 sw_html_title_tr(sw_html_buffer* buffer, const c8* text) {
+    if (!sw_html_open_tag(buffer, "title", NULL, 0)) return 0;
+    if (!sw_html_text_tr(buffer, text)) return 0;
+    return sw_html_close_tag(buffer, "title");
+}
+
 b8 sw_html_meta_charset(sw_html_buffer* buffer, const c8* charset) {
-    const sw_html_tag_attributes attrs = sw_html_attr(.charset = charset);
-    return sw_html_void_tag(buffer, "meta", &attrs);
+    return sw_html_void_tag(buffer, "meta", sw_html_attr_items(sw_html_attr_kv("charset", charset)));
 }

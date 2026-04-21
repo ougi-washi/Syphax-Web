@@ -8,10 +8,10 @@
 #endif
 
 #include "syphax/s_array.h"
-#include "syphax/web/sw_html.h"
-#include "syphax/web/sw_server.h"
-#include "syphax/web/sw_translator.h"
-#include "syphax/web/sw_utility.h"
+#include "sw_html.h"
+#include "sw_server.h"
+#include "sw_translator.h"
+#include "sw_utility.h"
 
 #include <ctype.h>
 #include <errno.h>
