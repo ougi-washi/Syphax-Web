@@ -1,0 +1,3 @@
+[submodule "lib/syphax"]
+	path = lib/syphax
+	url = git@github.com:ougi-washi/Syphax.git

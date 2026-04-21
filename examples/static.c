@@ -5,6 +5,7 @@
 
 void render_root(sw_connection *c) {
     c8* content = sw_init_html_buffer();
+    sw_header(content);
     sw_html(content,
         sw_head(content,
             sw_title(content, "Syphax-Web");
@@ -19,6 +20,7 @@ void render_root(sw_connection *c) {
         );
     );
     sw_http_reply(c, 200, "", content);
+    printf("Replied with %s\n", content);
     sw_destroy_html_buffer(content);
 }
 

@@ -190,7 +190,7 @@ static void sw_close_tag(c8* output, const c8* tag) {
 
 #define SW_HEADER_200 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\r\n"
 #define sw_header(output) do { \
-    sw_append(output, SW_HEADER); \
+    sw_append(output, SW_HEADER_200); \
 } while(0);
 
 #define sw_head(output, content) do { \
