@@ -13,6 +13,21 @@ option(SYPHAX_WEB_BUILD_EXAMPLES "Build syphax-web examples" OFF)
 option(SYPHAX_WEB_BUILD_TESTS "Build syphax-web tests" OFF)
 option(SYPHAX_WEB_ENABLE_WARNINGS "Enable compiler warnings" ON)
 
+set(SYPHAX_WEB_RUNTIME_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin")
+
+function(syphax_web_set_runtime_output target)
+    set_target_properties(${target} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${SYPHAX_WEB_RUNTIME_OUTPUT_DIR}"
+    )
+
+    foreach(config Debug Release RelWithDebInfo MinSizeRel)
+        string(TOUPPER "${config}" config_upper)
+        set_target_properties(${target} PROPERTIES
+            "RUNTIME_OUTPUT_DIRECTORY_${config_upper}" "${SYPHAX_WEB_RUNTIME_OUTPUT_DIR}"
+        )
+    endforeach()
+endfunction()
+
 set(SYPHAX_WEB_PUBLIC_HEADERS
     include/syphax/web/sw_export.h
     include/syphax/web/sw_types.h
@@ -77,6 +92,8 @@ if(SYPHAX_WEB_BUILD_EXAMPLES)
     add_executable(syphax_web_static_example examples/static.c)
     target_link_libraries(syphax_web_static_example PRIVATE syphax_web::syphax_web)
     target_compile_features(syphax_web_static_example PRIVATE c_std_11)
+    set_target_properties(syphax_web_static_example PROPERTIES OUTPUT_NAME syphax_web_static)
+    syphax_web_set_runtime_output(syphax_web_static_example)
     if(SYPHAX_WEB_ENABLE_WARNINGS)
         if(MSVC)
             target_compile_options(syphax_web_static_example PRIVATE /W4)
@@ -91,6 +108,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_executable(syphax_web_tests tests/test_suite.c)
     target_link_libraries(syphax_web_tests PRIVATE syphax_web::syphax_web)
     target_compile_features(syphax_web_tests PRIVATE c_std_11)
+    syphax_web_set_runtime_output(syphax_web_tests)
     if(UNIX AND NOT APPLE)
         target_link_libraries(syphax_web_tests PRIVATE pthread)
     endif()

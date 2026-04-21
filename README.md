@@ -34,6 +34,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+Development executables are written to `bin/` in the repo root:
+
+- `bin/syphax_web_static`
+- `bin/syphax_web_tests`
+
 Build a library-only configuration:
 
 ```bash
@@ -86,12 +91,14 @@ int main(void) {
 }
 ```
 
+When you bind to `0.0.0.0`, open `http://127.0.0.1:8000` or your machine's actual LAN address in the browser.
+
 ## Example
 
-With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `syphax_web_static_example`, which serves:
+With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `bin/syphax_web_static`, which serves:
 
 - `/` with HTML generated through the builder API
-- `/style.css` from `resources/style.css`
+- `/style.css` from `resources/style.css`, with a built-in fallback so the example still works outside the repo root
 
 ## Notes
 

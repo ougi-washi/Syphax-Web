@@ -29,6 +29,12 @@ typedef struct {
     int request_count;
 } sw_test_server_state;
 
+typedef struct {
+    char* data;
+    sz size;
+    b8 closed;
+} sw_test_response;
+
 #ifdef _WIN32
 typedef SOCKET sw_test_socket;
 #else
@@ -64,6 +70,12 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 
     if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/file") == 0) {
         assert(sw_http_serve_file(connection, state->file_path) == 0);
+        return;
+    }
+
+    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/style.css") == 0) {
+        const c8 css[] = "body { color: #fff; }\n";
+        assert(sw_http_reply(connection, 200, "text/css; charset=utf-8", css, sizeof(css) - 1) == 0);
         return;
     }
 
@@ -185,12 +197,14 @@ static sw_test_socket connect_to_port(u16 port) {
     return fd;
 }
 
-static char* issue_request(sw_mgr* mgr, u16 port, const c8* request) {
+static sw_test_response issue_request(sw_mgr* mgr, u16 port, const c8* request) {
     sw_test_socket fd = connect_to_port(port);
-    char* response = (char*)calloc(1, 65536);
+    sw_test_response response = {0};
     sz response_len = 0;
     int attempts;
 
+    response.data = (char*)calloc(1, 65536);
+    assert(response.data != NULL);
     assert(send(fd, request, (int)strlen(request), 0) == (int)strlen(request));
 
     for (attempts = 0; attempts < 200; ++attempts) {
@@ -199,12 +213,13 @@ static char* issue_request(sw_mgr* mgr, u16 port, const c8* request) {
         assert(sw_mgr_poll(mgr, 10) >= 0);
         received = (int)recv(fd, chunk, sizeof(chunk), 0);
         if (received > 0) {
-            memcpy(response + response_len, chunk, (sz)received);
+            memcpy(response.data + response_len, chunk, (sz)received);
             response_len += (sz)received;
-            response[response_len] = '\0';
+            response.data[response_len] = '\0';
             continue;
         }
         if (received == 0) {
+            response.closed = 1;
             break;
         }
 #ifdef _WIN32
@@ -221,7 +236,30 @@ static char* issue_request(sw_mgr* mgr, u16 port, const c8* request) {
 #else
     close(fd);
 #endif
+    response.size = response_len;
     return response;
+}
+
+static sz response_content_length(const sw_test_response* response) {
+    const char* header = strstr(response->data, "Content-Length:");
+    assert(header != NULL);
+    header += strlen("Content-Length:");
+    while (*header == ' ') {
+        ++header;
+    }
+    return (sz)strtoull(header, NULL, 10);
+}
+
+static sz response_body_size(const sw_test_response* response) {
+    const char* body = strstr(response->data, "\r\n\r\n");
+    assert(body != NULL);
+    body += 4;
+    return response->size - (sz)(body - response->data);
+}
+
+static void assert_complete_response(const sw_test_response* response) {
+    assert(response->closed);
+    assert(response_content_length(response) == response_body_size(response));
 }
 
 static void test_live_server(void) {
@@ -231,7 +269,7 @@ static void test_live_server(void) {
     char file_path[512];
     FILE* file;
     u16 port;
-    char* response;
+    sw_test_response response;
     int listen_rc;
 
     assert(mgr != NULL);
@@ -252,9 +290,10 @@ static void test_live_server(void) {
     assert(port != 0);
 
     response = issue_request(mgr, port, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    assert(strstr(response, "HTTP/1.1 200 OK") != NULL);
-    assert(strstr(response, "<h1>Syphax Web</h1>") != NULL);
-    free(response);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    assert(strstr(response.data, "<h1>Syphax Web</h1>") != NULL);
+    free(response.data);
 
     response = issue_request(mgr, port,
         "POST /form HTTP/1.1\r\n"
@@ -263,14 +302,22 @@ static void test_live_server(void) {
         "Content-Length: 13\r\n"
         "\r\n"
         "name=Jane+Doe");
-    assert(strstr(response, "name=Jane Doe") != NULL);
-    free(response);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "name=Jane Doe") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Content-Type: text/css; charset=utf-8") != NULL);
+    assert(strstr(response.data, "body { color: #fff; }") != NULL);
+    free(response.data);
 
     response = issue_request(mgr, port, "GET /file HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    assert(strstr(response, "static payload") != NULL);
-    free(response);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "static payload") != NULL);
+    free(response.data);
 
-    assert(state.request_count == 3);
+    assert(state.request_count == 4);
     remove(file_path);
     sw_mgr_destroy(mgr);
 }
