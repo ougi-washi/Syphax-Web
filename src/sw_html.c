@@ -37,6 +37,32 @@ static b8 sw_h_maybe_emit_doctype(sw_hbuf* h, const c8* tag) {
     return 1;
 }
 
+static b8 sw_h_translation_active(const sw_hbuf* h) {
+    return h != NULL && h->translation_enabled && h->translator != NULL;
+}
+
+static const c8* sw_h_translate_if_needed(const sw_hbuf* h, const c8* text, b8 no_translate) {
+    if (text == NULL || no_translate || !sw_h_translation_active(h)) {
+        return text;
+    }
+
+    return sw_translate(h->translator, text);
+}
+
+static b8 sw_h_attr_allows_translation(const c8* name) {
+    if (name == NULL) {
+        return 0;
+    }
+
+    return sw_stricmp_ascii(name, "title") == 0
+        || sw_stricmp_ascii(name, "placeholder") == 0
+        || sw_stricmp_ascii(name, "alt") == 0
+        || sw_stricmp_ascii(name, "aria-label") == 0
+        || sw_stricmp_ascii(name, "aria-description") == 0
+        || sw_stricmp_ascii(name, "aria-placeholder") == 0
+        || sw_stricmp_ascii(name, "aria-valuetext") == 0;
+}
+
 static b8 sw_h_append_escaped(sw_hbuf* h, const c8* text, b8 attribute) {
     sz i;
 
@@ -78,7 +104,7 @@ static b8 sw_h_append_escaped(sw_hbuf* h, const c8* text, b8 attribute) {
     return 1;
 }
 
-static b8 sw_h_append_attr(sw_hbuf* h, const sw_attr* attr) {
+static b8 sw_h_append_attr(sw_hbuf* h, const sw_attr_item* attr) {
     const c8* value;
 
     if (attr == NULL || attr->name == NULL || attr->name[0] == '\0' || !attr->enabled) {
@@ -95,8 +121,8 @@ static b8 sw_h_append_attr(sw_hbuf* h, const sw_attr* attr) {
         return 1;
     }
 
-    if (attr->translate) {
-        value = sw_translate(h->translator, value);
+    if (!attr->no_translate && sw_h_attr_allows_translation(attr->name)) {
+        value = sw_h_translate_if_needed(h, value, 0);
     }
 
     if (!sw_char_array_append_byte(&h->bytes, ' ')) return 0;
@@ -106,7 +132,7 @@ static b8 sw_h_append_attr(sw_hbuf* h, const sw_attr* attr) {
     return sw_char_array_append_byte(&h->bytes, '"');
 }
 
-static b8 sw_h_append_attrs(sw_hbuf* h, const sw_attr* attrs, sz attr_count) {
+static b8 sw_h_append_attrs(sw_hbuf* h, const sw_attr_item* attrs, sz attr_count) {
     sz i;
 
     if (attrs == NULL || attr_count == 0) {
@@ -130,6 +156,7 @@ sw_hbuf* sw_hbuf_new(void) {
     }
 
     sw_char_array_init(&h->bytes);
+    h->translation_enabled = 1;
     return h;
 }
 
@@ -148,24 +175,41 @@ void sw_hbuf_reset(sw_hbuf* h) {
     }
 
     sw_char_array_reset(&h->bytes);
+    h->translation_enabled = 1;
     h->html_doctype_emitted = 0;
     h->js_runtime_emitted = 0;
 }
 
-void sw_hbuf_set_tr(sw_hbuf* h, const sw_translator* tr) {
+void sw_hbuf_set_translator(sw_hbuf* h, const sw_translator* translator) {
     if (h == NULL) {
         return;
     }
 
-    h->translator = tr;
+    h->translator = translator;
 }
 
-const sw_translator* sw_hbuf_get_tr(const sw_hbuf* h) {
+const sw_translator* sw_hbuf_get_translator(const sw_hbuf* h) {
     if (h == NULL) {
         return NULL;
     }
 
     return h->translator;
+}
+
+void sw_hbuf_set_translation(sw_hbuf* h, b8 enabled) {
+    if (h == NULL) {
+        return;
+    }
+
+    h->translation_enabled = enabled ? 1 : 0;
+}
+
+b8 sw_hbuf_translation_enabled(const sw_hbuf* h) {
+    if (h == NULL) {
+        return 0;
+    }
+
+    return h->translation_enabled;
 }
 
 const c8* sw_hbuf_data(const sw_hbuf* h) {
@@ -210,20 +254,20 @@ b8 sw_void(sw_hbuf* h, const c8* tag, sw_attr_list attrs) {
     return sw_tag(h, tag, attrs);
 }
 
-b8 sw_txt(sw_hbuf* h, const c8* text) {
+b8 sw_text(sw_hbuf* h, const c8* text) {
+    if (h == NULL) {
+        return 0;
+    }
+
+    return sw_h_append_escaped(h, sw_h_translate_if_needed(h, text, 0), 0);
+}
+
+b8 sw_text_no_translate(sw_hbuf* h, const c8* text) {
     if (h == NULL) {
         return 0;
     }
 
     return sw_h_append_escaped(h, text, 0);
-}
-
-b8 sw_txt_tr(sw_hbuf* h, const c8* text) {
-    if (h == NULL) {
-        return 0;
-    }
-
-    return sw_h_append_escaped(h, sw_translate(h->translator, text), 0);
 }
 
 b8 sw_raw(sw_hbuf* h, const c8* text) {
@@ -250,16 +294,16 @@ b8 sw_rawf(sw_hbuf* h, const c8* fmt, ...) {
 
 b8 sw_title(sw_hbuf* h, const c8* text) {
     if (!sw_tag(h, "title", sw_no_attrs)) return 0;
-    if (!sw_txt(h, text)) return 0;
+    if (!sw_text(h, text)) return 0;
     return sw_end(h, "title");
 }
 
-b8 sw_title_tr(sw_hbuf* h, const c8* text) {
+b8 sw_title_no_translate(sw_hbuf* h, const c8* text) {
     if (!sw_tag(h, "title", sw_no_attrs)) return 0;
-    if (!sw_txt_tr(h, text)) return 0;
+    if (!sw_text_no_translate(h, text)) return 0;
     return sw_end(h, "title");
 }
 
 b8 sw_meta_charset(sw_hbuf* h, const c8* charset) {
-    return sw_void(h, "meta", sw_attrs(sw_kv("charset", charset)));
+    return sw_void(h, "meta", sw_attrs(sw_attr("charset", charset)));
 }

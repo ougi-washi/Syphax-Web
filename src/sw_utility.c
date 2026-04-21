@@ -91,6 +91,48 @@ const c8* sw_strcasestr_ascii(const c8* haystack, const c8* needle) {
     return NULL;
 }
 
+b8 sw_matches_query(const c8* text, const c8* query, b8 case_sensitive) {
+    sz query_len;
+    sz text_len;
+    sz i;
+    sz j;
+
+    if (text == NULL || query == NULL) {
+        return 0;
+    }
+
+    query_len = strlen(query);
+    text_len = strlen(text);
+
+    if (query_len == 0) {
+        return 1;
+    }
+    if (query_len > text_len) {
+        return 0;
+    }
+
+    for (i = 0; i + query_len <= text_len; ++i) {
+        for (j = 0; j < query_len; ++j) {
+            c8 text_ch = text[i + j];
+            c8 query_ch = query[j];
+
+            if (!case_sensitive) {
+                text_ch = (c8)tolower((unsigned char)text_ch);
+                query_ch = (c8)tolower((unsigned char)query_ch);
+            }
+
+            if (text_ch != query_ch) {
+                break;
+            }
+        }
+        if (j == query_len) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 void sw_char_array_init(sw_char_array* array) {
     s_array_init(array);
 }

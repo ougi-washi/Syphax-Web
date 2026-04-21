@@ -148,7 +148,7 @@ static b8 sw_j_emit_initializer(sw_hbuf* h, const c8* helper_name, const c8* met
     if (!sw_j_runtime(h)) {
         return 0;
     }
-    if (!sw_tag(h, "script", sw_attrs(sw_kv("data-swjs", helper_name)))) return 0;
+    if (!sw_tag(h, "script", sw_attrs(sw_attr("data-swjs", helper_name)))) return 0;
     if (!sw_rawf(h, "window.__swjsRuntime.%s(", method_name)) return 0;
     if (!sw_raw(h, sw_char_array_data(config))) return 0;
     if (!sw_raw(h, ");")) return 0;
@@ -233,7 +233,7 @@ b8 sw_j_runtime(sw_hbuf* h) {
         return 1;
     }
 
-    if (!sw_tag(h, "script", sw_attrs(sw_kv("data-swjs", "runtime")))) {
+    if (!sw_tag(h, "script", sw_attrs(sw_attr("data-swjs", "runtime")))) {
         return 0;
     }
     for (i = 0; i < sizeof(sw_j_runtime_chunks) / sizeof(sw_j_runtime_chunks[0]); ++i) {
@@ -246,6 +246,24 @@ b8 sw_j_runtime(sw_hbuf* h) {
     }
     h->js_runtime_emitted = 1;
     return 1;
+}
+
+b8 sw_j_live_search(sw_hbuf* h, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint) {
+    const sw_j_live_opts options = {
+        .form_id = form_id,
+        .input_id = input_id,
+        .target_id = target_id,
+        .endpoint = endpoint,
+        .loading_class = "is-loading",
+        .debounce_ms = 120,
+        .method = SW_J_GET,
+        .swap_mode = SW_J_INNER,
+        .serialize_form = 1,
+        .abort_stale = 1,
+        .prevent_submit = 1
+    };
+
+    return sw_j_live_cfg(h, &options);
 }
 
 b8 sw_j_live_cfg(sw_hbuf* h, const sw_j_live_opts* opt) {

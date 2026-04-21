@@ -55,7 +55,10 @@ SW_API i32 sw_http_write(sw_connection* connection, const void* data, sz data_le
 SW_API i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...);
 SW_API i32 sw_http_serve_file(sw_connection* connection, const c8* path);
 
+SW_API b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path);
 SW_API const c8* sw_http_header_get(const sw_http_message* hm, const c8* name);
+SW_API i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
+SW_API i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset);
 SW_API void sw_http_multipart_clear(sw_http_multipart* mp);

@@ -76,6 +76,7 @@ typedef struct {
 } sw_j_class_opts;
 
 SW_API b8 sw_j_runtime(sw_hbuf* h);
+SW_API b8 sw_j_live_search(sw_hbuf* h, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint);
 SW_API b8 sw_j_live_cfg(sw_hbuf* h, const sw_j_live_opts* opt);
 SW_API b8 sw_j_fetch_cfg(sw_hbuf* h, const sw_j_fetch_opts* opt);
 SW_API b8 sw_j_toggle_cfg(sw_hbuf* h, const sw_j_toggle_opts* opt);

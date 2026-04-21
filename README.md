@@ -80,17 +80,22 @@ target_link_libraries(my_target PRIVATE syphax_web::syphax_web)
 #include "sw_server.h"
 
 static void handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
-    sw_hbuf* h = sw_hbuf_new();
-    (void)request;
     (void)user_data;
 
+    if (!sw_http_is(request, "GET", "/")) {
+        sw_http_replyf(connection, 404, "text/plain; charset=utf-8", "Not Found");
+        return;
+    }
+
+    sw_hbuf* h = sw_hbuf_new();
+
     sw_html(h, sw_attrs(
-        sw_kv("lang", "en"),
-        sw_kv("data-app", "demo")
+        sw_attr("lang", "en"),
+        sw_attr("data-app", "demo")
     ), {
         sw_body(h, sw_no_attrs, {
             sw_h1(h, sw_no_attrs, {
-                sw_txt_tr(h, "Syphax Web");
+                sw_text(h, "Syphax Web");
             });
         });
     });
@@ -112,10 +117,14 @@ When you bind to `0.0.0.0`, open `http://127.0.0.1:8000` or your machine's actua
 ## Short HTML Pattern
 
 - Use one small C function per page fragment instead of building one giant render function.
-- Use `sw_txt()` for escaped text and `sw_txt_tr()` when you want translation too.
-- Use `sw_kv`, `sw_tr`, `sw_bool`, and `sw_attrs(...)` for attributes.
+- Use `sw_http_is()`, `sw_http_get_query()`, and `sw_http_get_form()` to keep route and field handling readable.
+- Use `sw_matches_query(text, query, case_sensitive)` when you need reusable text filtering without re-implementing substring matching in each example or route.
+- Use `sw_text()` for normal escaped text output.
+- Use `sw_text_no_translate()` only when you intentionally render user input, identifiers, or other literal text.
+- Use `sw_attr`, `sw_attr_bool`, and `sw_attrs(...)` for most attributes.
 - Use `sw_div`, `sw_form`, `sw_input`, `sw_section`, and the other tag macros for common markup.
-- Use `sw_j_*` helpers to emit common browser behavior inline without maintaining a separate asset for routine interactions.
+- Use `sw_j_live_search()` when you want the common live-search pattern without spelling out every JS option.
+- Use the more generic `sw_j_*` helpers when you need custom behavior.
 - Keep HTTP response writing separate from HTML generation.
 
 ```c
@@ -123,43 +132,30 @@ When you bind to `0.0.0.0`, open `http://127.0.0.1:8000` or your machine's actua
 
 static void render_search_panel(sw_hbuf* h) {
     sw_section(h, sw_attrs(
-        sw_kv("class", "panel"),
-        sw_kv("data-component", "search-panel")
+        sw_attr("class", "panel"),
+        sw_attr("data-component", "search-panel")
     ), {
         sw_form(h, sw_attrs(
-            sw_kv("id", "search-form"),
-            sw_kv("action", "/"),
-            sw_kv("method", "post")
+            sw_attr("id", "search-form"),
+            sw_attr("action", "/"),
+            sw_attr("method", "get")
         ), {
             sw_h2(h, sw_no_attrs, {
-                sw_txt_tr(h, "Search");
+                sw_text(h, "Search");
             });
             sw_input(h, sw_attrs(
-                sw_kv("id", "search-input"),
-                sw_kv("type", "text"),
-                sw_kv("name", "q"),
-                sw_tr("placeholder", "Search"),
-                sw_bool("disabled", 0)
+                sw_attr("id", "search-input"),
+                sw_attr("type", "text"),
+                sw_attr("name", "q"),
+                sw_attr("placeholder", "Search"),
+                sw_attr_bool("disabled", 0)
             ));
-            sw_div(h, sw_attrs(sw_kv("id", "search-preview")), {
+            sw_div(h, sw_attrs(sw_attr("id", "search-preview")), {
             });
         });
     });
 
-    sw_j_live(h,
-        .form_id = "search-form",
-        .input_id = "search-input",
-        .target_id = "search-preview",
-        .endpoint = "/search-preview",
-        .value_param = "q",
-        .loading_class = "is-loading",
-        .debounce_ms = 120,
-        .method = SW_J_POST,
-        .swap_mode = SW_J_INNER,
-        .serialize_form = 1,
-        .abort_stale = 1,
-        .prevent_submit = 1
-    );
+    sw_j_live_search(h, "search-form", "search-input", "search-preview", "/search-preview");
 }
 ```
 
@@ -167,7 +163,7 @@ static void render_search_panel(sw_hbuf* h) {
 
 With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `bin/syphax_web_static`, which serves:
 
-- `/` with HTML generated through the short tag API
+- `/` with HTML generated through the short tag API and query-string driven search
 - `/style.css` directly from `resources/style.css`
 - `/search-preview`, which returns an HTML fragment that the root page swaps into an inline preview div on each character input
 

@@ -86,6 +86,7 @@ struct sw_translator {
 struct sw_hbuf {
     sw_char_array bytes;
     const sw_translator* translator;
+    b8 translation_enabled;
     b8 html_doctype_emitted;
     b8 js_runtime_emitted;
 };

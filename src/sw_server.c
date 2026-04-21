@@ -969,6 +969,48 @@ const c8* sw_http_header_get(const sw_http_message* hm, const c8* name) {
     return NULL;
 }
 
+static sz sw_http_path_length(const c8* uri) {
+    const c8* cursor = uri;
+
+    if (cursor == NULL) {
+        return 0;
+    }
+
+    while (*cursor != '\0' && *cursor != '?') {
+        ++cursor;
+    }
+
+    return (sz)(cursor - uri);
+}
+
+static const c8* sw_http_query_string(const sw_http_message* hm, sz* query_len) {
+    const c8* query_begin;
+    const c8* query_end;
+
+    if (query_len != NULL) {
+        *query_len = 0;
+    }
+    if (hm == NULL || hm->uri == NULL) {
+        return NULL;
+    }
+
+    query_begin = strchr(hm->uri, '?');
+    if (query_begin == NULL) {
+        return NULL;
+    }
+    query_begin += 1;
+
+    query_end = strchr(query_begin, '#');
+    if (query_end == NULL) {
+        query_end = query_begin + strlen(query_begin);
+    }
+
+    if (query_len != NULL) {
+        *query_len = (sz)(query_end - query_begin);
+    }
+    return query_begin;
+}
+
 static int sw_hex_value(c8 ch) {
     if (ch >= '0' && ch <= '9') return ch - '0';
     if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
@@ -976,33 +1018,36 @@ static int sw_hex_value(c8 ch) {
     return -1;
 }
 
-i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
-    const c8* body = (hm != NULL) ? hm->body : NULL;
+static i32 sw_http_decode_var(const c8* source, sz source_len, const c8* name, c8* buf, sz buf_len, i32 missing_value) {
     const sz name_len = (name != NULL) ? strlen(name) : 0;
     const c8* cursor;
+    const c8* source_end;
 
-    if (body == NULL || name == NULL || buf == NULL || buf_len == 0) {
+    if (source == NULL || name == NULL || buf == NULL || buf_len == 0) {
         return -1;
     }
 
-    cursor = body;
-    while (*cursor != '\0') {
+    buf[0] = '\0';
+    cursor = source;
+    source_end = source + source_len;
+    while (cursor < source_end) {
+        const c8* pair_end = memchr(cursor, '&', (sz)(source_end - cursor));
+        const c8* equals = NULL;
         const c8* value_begin;
-        const c8* value_end;
         sz written = 0;
 
-        if (strncmp(cursor, name, name_len) == 0 && cursor[name_len] == '=') {
-            value_begin = cursor + name_len + 1;
-            value_end = strchr(value_begin, '&');
-            if (value_end == NULL) {
-                value_end = value_begin + strlen(value_begin);
-            }
+        if (pair_end == NULL) {
+            pair_end = source_end;
+        }
 
-            while (value_begin < value_end && written + 1 < buf_len) {
+        equals = memchr(cursor, '=', (sz)(pair_end - cursor));
+        if (equals != NULL && (sz)(equals - cursor) == name_len && strncmp(cursor, name, name_len) == 0) {
+            value_begin = equals + 1;
+            while (value_begin < pair_end && written + 1 < buf_len) {
                 if (*value_begin == '+' ) {
                     buf[written++] = ' ';
                     ++value_begin;
-                } else if (*value_begin == '%' && value_begin + 2 < value_end) {
+                } else if (*value_begin == '%' && value_begin + 2 < pair_end) {
                     const int hi = sw_hex_value(value_begin[1]);
                     const int lo = sw_hex_value(value_begin[2]);
                     if (hi >= 0 && lo >= 0) {
@@ -1020,14 +1065,70 @@ i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_l
             return (i32)written;
         }
 
-        cursor = strchr(cursor, '&');
-        if (cursor == NULL) {
+        if (pair_end == source_end) {
             break;
         }
-        ++cursor;
+        cursor = pair_end + 1;
     }
 
-    return -1;
+    return missing_value;
+}
+
+b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path) {
+    const sz request_path_len = sw_http_path_length((hm != NULL) ? hm->uri : NULL);
+    const sz path_len = (path != NULL) ? strlen(path) : 0;
+
+    if (hm == NULL || hm->method == NULL || hm->uri == NULL || method == NULL || path == NULL) {
+        return 0;
+    }
+
+    return strcmp(hm->method, method) == 0
+        && request_path_len == path_len
+        && strncmp(hm->uri, path, path_len) == 0;
+}
+
+i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
+    const c8* query;
+    sz query_len;
+
+    if (buf != NULL && buf_len > 0) {
+        buf[0] = '\0';
+    }
+    if (hm == NULL || name == NULL || buf == NULL || buf_len == 0) {
+        return -1;
+    }
+
+    query = sw_http_query_string(hm, &query_len);
+    if (query == NULL || query_len == 0) {
+        return 0;
+    }
+
+    return sw_http_decode_var(query, query_len, name, buf, buf_len, 0);
+}
+
+i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
+    if (buf != NULL && buf_len > 0) {
+        buf[0] = '\0';
+    }
+    if (hm == NULL || name == NULL || buf == NULL || buf_len == 0) {
+        return -1;
+    }
+    if (hm->body == NULL || hm->body_len == 0) {
+        return 0;
+    }
+
+    return sw_http_decode_var(hm->body, hm->body_len, name, buf, buf_len, 0);
+}
+
+i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
+    if (hm == NULL || hm->body == NULL) {
+        if (buf != NULL && buf_len > 0) {
+            buf[0] = '\0';
+        }
+        return -1;
+    }
+
+    return sw_http_decode_var(hm->body, hm->body_len, name, buf, buf_len, -1);
 }
 
 i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset) {

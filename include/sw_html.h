@@ -15,39 +15,44 @@ typedef struct {
     const c8* name;
     const c8* value;
     b8 enabled;
-    b8 translate;
+    b8 no_translate;
     b8 is_boolean;
-} sw_attr;
+} sw_attr_item;
 
 typedef struct {
-    const sw_attr* items;
+    const sw_attr_item* items;
     sz count;
 } sw_attr_list;
 
-#define sw_kv(_name, _value) ((sw_attr){ .name = (_name), .value = (_value), .enabled = 1 })
-#define sw_tr(_name, _value) ((sw_attr){ .name = (_name), .value = (_value), .enabled = 1, .translate = 1 })
-#define sw_bool(_name, _enabled) ((sw_attr){ .name = (_name), .enabled = (_enabled), .is_boolean = 1 })
-#define sw_attrs(...) ((sw_attr_list){ .items = (const sw_attr[]){ __VA_ARGS__ }, .count = sizeof((const sw_attr[]){ __VA_ARGS__ }) / sizeof(sw_attr) })
+#define sw_attr(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1 })
+#define sw_attr_no_translate(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1, .no_translate = 1 })
+#define sw_attr_bool(_name, _enabled) ((sw_attr_item){ .name = (_name), .enabled = (_enabled), .is_boolean = 1 })
+#define sw_attrs(...) ((sw_attr_list){ .items = (const sw_attr_item[]){ __VA_ARGS__ }, .count = sizeof((const sw_attr_item[]){ __VA_ARGS__ }) / sizeof(sw_attr_item) })
 #define sw_no_attrs ((sw_attr_list){ NULL, 0 })
 
 SW_API sw_hbuf* sw_hbuf_new(void);
 SW_API void sw_hbuf_free(sw_hbuf* h);
 SW_API void sw_hbuf_reset(sw_hbuf* h);
-SW_API void sw_hbuf_set_tr(sw_hbuf* h, const sw_translator* tr);
-SW_API const sw_translator* sw_hbuf_get_tr(const sw_hbuf* h);
+SW_API void sw_hbuf_set_translator(sw_hbuf* h, const sw_translator* translator);
+SW_API const sw_translator* sw_hbuf_get_translator(const sw_hbuf* h);
+SW_API void sw_hbuf_set_translation(sw_hbuf* h, b8 enabled);
+SW_API b8 sw_hbuf_translation_enabled(const sw_hbuf* h);
 SW_API const c8* sw_hbuf_data(const sw_hbuf* h);
 SW_API sz sw_hbuf_len(const sw_hbuf* h);
 
 SW_API b8 sw_tag(sw_hbuf* h, const c8* tag, sw_attr_list attrs);
 SW_API b8 sw_end(sw_hbuf* h, const c8* tag);
 SW_API b8 sw_void(sw_hbuf* h, const c8* tag, sw_attr_list attrs);
-SW_API b8 sw_txt(sw_hbuf* h, const c8* text);
-SW_API b8 sw_txt_tr(sw_hbuf* h, const c8* text);
+SW_API b8 sw_text(sw_hbuf* h, const c8* text);
+SW_API b8 sw_text_no_translate(sw_hbuf* h, const c8* text);
 SW_API b8 sw_raw(sw_hbuf* h, const c8* text);
 SW_API b8 sw_rawf(sw_hbuf* h, const c8* fmt, ...);
 SW_API b8 sw_title(sw_hbuf* h, const c8* text);
-SW_API b8 sw_title_tr(sw_hbuf* h, const c8* text);
+SW_API b8 sw_title_no_translate(sw_hbuf* h, const c8* text);
 SW_API b8 sw_meta_charset(sw_hbuf* h, const c8* charset);
+
+#define sw_translate_on(_h) sw_hbuf_set_translation((_h), 1)
+#define sw_translate_off(_h) sw_hbuf_set_translation((_h), 0)
 
 #define SW_BLOCK_TAG(_h, _tag, _attrs, _content) \
     do { \

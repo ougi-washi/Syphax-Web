@@ -147,6 +147,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_test(NAME syphax_web_tests_js_short_api COMMAND syphax_web_tests js_short_api)
     add_test(NAME syphax_web_tests_public_short_names COMMAND syphax_web_tests public_short_names)
     add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
+    add_test(NAME syphax_web_tests_utility_helpers COMMAND syphax_web_tests utility_helpers)
     add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
 endif()
 

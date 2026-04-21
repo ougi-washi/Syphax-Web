@@ -69,15 +69,24 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 
     state->request_count += 1;
 
-    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/") == 0) {
+    if (sw_http_is(request, "GET", "/")) {
         sw_hbuf* h = sw_hbuf_new();
+        assert(sw_http_get_query(request, "q", query, sizeof(query)) >= 0);
         sw_html(h, sw_no_attrs, {
             sw_body(h, sw_no_attrs, {
                 sw_h1(h, sw_no_attrs, {
-                    sw_txt(h, "Syphax Web");
+                    sw_text(h, "Syphax Web");
                 });
-                sw_div(h, sw_attrs(sw_kv("id", "sw-search-preview")), {
-                    sw_raw(h, "<section class=\"sw-preview-shell\"><p>Type to search.</p></section>");
+                sw_div(h, sw_attrs(sw_attr("id", "sw-search-preview")), {
+                    sw_section(h, sw_attrs(sw_attr("class", "sw-preview-shell")), {
+                        sw_p(h, sw_no_attrs, {
+                            if (query[0] == '\0') {
+                                sw_text(h, "Type to search.");
+                            } else {
+                                sw_text_no_translate(h, query);
+                            }
+                        });
+                    });
                 });
             });
         });
@@ -86,65 +95,34 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
         return;
     }
 
-    if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/form") == 0) {
-        assert(sw_http_get_var(request, "name", query, sizeof(query)) > 0);
+    if (sw_http_is(request, "POST", "/form")) {
+        assert(sw_http_get_form(request, "name", query, sizeof(query)) > 0);
         sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "name=%s", query);
         return;
     }
 
-    if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/") == 0) {
-        sw_hbuf* h = sw_hbuf_new();
-        assert(h != NULL);
-        assert(sw_http_get_var(request, "q", query, sizeof(query)) >= 0);
-        sw_html(h, sw_no_attrs, {
-            sw_body(h, sw_no_attrs, {
-                sw_div(h, sw_attrs(sw_kv("id", "sw-search-preview")), {
-                    sw_section(h, sw_attrs(sw_kv("class", "sw-preview-shell")), {
-                        sw_p(h, sw_no_attrs, {
-                            sw_txt(h, query);
-                        });
-                    });
-                });
-            });
-        });
-        assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
-            sw_hbuf_data(h), sw_hbuf_len(h)) == 0);
-        sw_hbuf_free(h);
-        return;
-    }
-
-    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/file") == 0) {
+    if (sw_http_is(request, "GET", "/file")) {
         assert(sw_http_serve_file(connection, state->file_path) == 0);
         return;
     }
 
-    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/style.css") == 0) {
+    if (sw_http_is(request, "GET", "/style.css")) {
         const c8 css[] = "body { color: #fff; }\n";
         assert(sw_http_reply(connection, 200, "text/css; charset=utf-8", css, sizeof(css) - 1) == 0);
         return;
     }
 
-    if (strcmp(request->method, "GET") == 0 && strcmp(request->uri, "/search-preview") == 0) {
+    if (sw_http_is(request, "GET", "/search-preview")) {
         sw_hbuf* h = sw_hbuf_new();
         assert(h != NULL);
-        sw_section(h, sw_attrs(sw_kv("class", "sw-preview-shell")), {
+        assert(sw_http_get_query(request, "q", query, sizeof(query)) >= 0);
+        sw_section(h, sw_attrs(sw_attr("class", "sw-preview-shell")), {
             sw_p(h, sw_no_attrs, {
-                sw_txt(h, "Type to search.");
-            });
-        });
-        assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
-            sw_hbuf_data(h), sw_hbuf_len(h)) == 0);
-        sw_hbuf_free(h);
-        return;
-    }
-
-    if (strcmp(request->method, "POST") == 0 && strcmp(request->uri, "/search-preview") == 0) {
-        sw_hbuf* h = sw_hbuf_new();
-        assert(h != NULL);
-        assert(sw_http_get_var(request, "q", query, sizeof(query)) >= 0);
-        sw_section(h, sw_attrs(sw_kv("class", "sw-preview-shell")), {
-            sw_p(h, sw_no_attrs, {
-                sw_txt(h, query);
+                if (query[0] == '\0') {
+                    sw_text(h, "Type to search.");
+                } else {
+                    sw_text_no_translate(h, query);
+                }
             });
         });
         assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
@@ -172,25 +150,44 @@ static void test_html_short_api(void) {
     const c8* html;
 
     assert(sw_translator_set_language(translator, "fr"));
-    sw_hbuf_set_tr(h, translator);
+    sw_hbuf_set_translator(h, translator);
 
     assert(sw_tag(h, "div", sw_attrs(
-        sw_kv("class", "shell"),
-        sw_tr("title", "Search")
+        sw_attr("class", "shell"),
+        sw_attr("title", "Search"),
+        sw_attr("aria-label", "Search"),
+        (sw_attr_item){ .name = "alt", .value = "Search", .enabled = 1, .no_translate = 1 }
     )));
     assert(sw_void(h, "input", sw_attrs(
-        sw_kv("type", "text"),
-        sw_tr("placeholder", "Search"),
-        sw_kv("value", "\"quoted\"")
+        sw_attr("type", "text"),
+        sw_attr("placeholder", "Search"),
+        sw_attr("value", "\"quoted\"")
     )));
-    assert(sw_txt_tr(h, "<safe & sound>"));
+    assert(sw_text(h, "Search"));
+    assert(sw_text_no_translate(h, "Search"));
     assert(sw_end(h, "div"));
 
     assert(strstr(sw_hbuf_data(h), "title=\"Rechercher\"") != NULL);
     assert(strstr(sw_hbuf_data(h), "placeholder=\"Rechercher\"") != NULL);
+    assert(strstr(sw_hbuf_data(h), "aria-label=\"Rechercher\"") != NULL);
+    assert(strstr(sw_hbuf_data(h), "alt=\"Search\"") != NULL);
     assert(strstr(sw_hbuf_data(h), "value=\"&quot;quoted&quot;\"") != NULL);
-    assert(strstr(sw_hbuf_data(h), "&lt;safe &amp; sound&gt;") != NULL);
+    assert(strstr(sw_hbuf_data(h), "RechercherSearch") != NULL);
     assert(strstr(sw_hbuf_data(h), "</input>") == NULL);
+
+    sw_hbuf_reset(h);
+    assert(sw_hbuf_translation_enabled(h));
+    sw_translate_off(h);
+    assert(!sw_hbuf_translation_enabled(h));
+    assert(sw_tag(h, "div", sw_attrs(sw_attr("title", "Search"))));
+    assert(sw_text(h, "Search"));
+    sw_translate_on(h);
+    assert(sw_hbuf_translation_enabled(h));
+    assert(sw_text(h, "Search"));
+    assert(sw_end(h, "div"));
+    html = sw_hbuf_data(h);
+    assert(strstr(html, "title=\"Search\"") != NULL);
+    assert(strstr(html, ">SearchRechercher</div>") != NULL);
 
     sw_hbuf_reset(h);
     assert(sw_tag(h, "HTML", sw_no_attrs));
@@ -205,7 +202,7 @@ static void test_html_short_api(void) {
     assert(strstr(sw_hbuf_data(h), "<!doctype html>") == NULL);
 
     sw_hbuf_reset(h);
-    assert(sw_txt(h, "prefix"));
+    assert(sw_text_no_translate(h, "prefix"));
     assert(sw_tag(h, "html", sw_no_attrs));
     assert(sw_end(h, "html"));
     html = sw_hbuf_data(h);
@@ -232,50 +229,50 @@ static void test_html_short_macros(void) {
     const c8* html;
 
     assert(sw_translator_set_language(translator, "fr"));
-    sw_hbuf_set_tr(h, translator);
+    sw_hbuf_set_translator(h, translator);
 
     assert(sw_title(h, "Search"));
-    assert(sw_title_tr(h, "Search"));
+    assert(sw_title_no_translate(h, "Search"));
     sw_section(h, sw_attrs(
-        sw_kv("class", "shell"),
-        sw_kv("data-mode", "demo"),
-        sw_tr("data-label", "Search"),
-        sw_bool("hidden", 1),
-        sw_bool("selected", 1)
+        sw_attr("class", "shell"),
+        sw_attr("data-mode", "demo"),
+        sw_attr("data-label", "Search"),
+        sw_attr_bool("hidden", 1),
+        sw_attr_bool("selected", 1)
     ), {
         sw_input(h, sw_attrs(
-            sw_kv("type", "text"),
-            sw_tr("placeholder", "Search"),
-            sw_kv("data-role", "search"),
-            sw_bool("disabled", 1)
+            sw_attr("type", "text"),
+            sw_attr("placeholder", "Search"),
+            sw_attr("data-role", "search"),
+            sw_attr_bool("disabled", 1)
         ));
-        sw_txt(h, "Search");
-        sw_txt_tr(h, "Search");
+        sw_text(h, "Search");
+        sw_text_no_translate(h, "Search");
     });
     sw_div(h, sw_no_attrs, {
-        sw_a(h, sw_attrs(sw_kv("href", "/docs")), {
-            sw_txt(h, "Docs");
+        sw_a(h, sw_attrs(sw_attr_no_translate("href", "/docs")), {
+            sw_text(h, "Docs");
         });
-        sw_button(h, sw_attrs(sw_kv("type", "button")), {
-            sw_txt(h, "Open");
+        sw_button(h, sw_attrs(sw_attr_no_translate("type", "button")), {
+            sw_text(h, "Open");
         });
     });
-    sw_el(h, "custom-card", sw_attrs(sw_kv("data-role", "demo")), {
-        sw_txt(h, "Custom");
+    sw_el(h, "custom-card", sw_attrs(sw_attr("data-role", "demo")), {
+        sw_text(h, "Custom");
     });
 
     html = sw_hbuf_data(h);
-    assert(strstr(html, "<title>Search</title>") != NULL);
     assert(strstr(html, "<title>Rechercher</title>") != NULL);
+    assert(strstr(html, "<title>Search</title>") != NULL);
     assert(strstr(html, "data-mode=\"demo\"") != NULL);
-    assert(strstr(html, "data-label=\"Rechercher\"") != NULL);
+    assert(strstr(html, "data-label=\"Search\"") != NULL);
     assert(strstr(html, "placeholder=\"Rechercher\"") != NULL);
     assert(strstr(html, "data-role=\"search\"") != NULL);
     assert(strstr(html, "hidden") != NULL);
     assert(strstr(html, "selected") != NULL);
     assert(strstr(html, "disabled") != NULL);
     assert(strstr(html, "</input>") == NULL);
-    assert(strstr(html, "SearchRechercher") != NULL);
+    assert(strstr(html, "RechercherSearch") != NULL);
     assert(strstr(html, "<a href=\"/docs\">Docs</a>") != NULL);
     assert(strstr(html, "<button type=\"button\">Open</button>") != NULL);
     assert(strstr(html, "<custom-card data-role=\"demo\">Custom</custom-card>") != NULL);
@@ -352,18 +349,21 @@ static void test_js_short_api(void) {
         .target_id = "macro-results",
         .endpoint = "/macro-fetch"
     ));
+    assert(sw_j_live_search(h, "search-form", "search-input", "search-preview", "/search-preview"));
 
     html = sw_hbuf_data(h);
     assert(count_occurrences(html, "data-swjs=\"runtime\"") == 1);
-    assert(count_occurrences(html, "data-swjs=\"live-search\"") == 2);
+    assert(count_occurrences(html, "data-swjs=\"live-search\"") == 3);
     assert(count_occurrences(html, "data-swjs=\"fetch-replace\"") == 2);
     assert(count_occurrences(html, "data-swjs=\"toggle\"") == 1);
     assert(count_occurrences(html, "data-swjs=\"class-toggle\"") == 1);
     assert(strstr(html, "window.__swjsRuntime.liveSearch(") != NULL);
     assert(strstr(html, "\"debounceMs\":150") != NULL);
+    assert(strstr(html, "\"debounceMs\":120") != NULL);
     assert(strstr(html, "\"serializeForm\":true") != NULL);
     assert(strstr(html, "\"abortStale\":true") != NULL);
     assert(strstr(html, "\"preventSubmit\":true") != NULL);
+    assert(strstr(html, "\"method\":0") != NULL);
     assert(strstr(html, "\"swapMode\":1") != NULL);
     assert(strstr(html, "\"eventType\":2") != NULL);
     assert(strstr(html, "\"className\":\"is-active\"") != NULL);
@@ -392,7 +392,7 @@ static void test_request_helpers(void) {
         "--demo--\r\n";
     const sw_http_message message = {
         .method = "POST",
-        .uri = "/upload",
+        .uri = "/upload?q=Jane+Doe&empty=&encoded=A%2FB",
         .proto = "HTTP/1.1",
         .headers = headers,
         .num_headers = 1,
@@ -414,6 +414,22 @@ static void test_request_helpers(void) {
     sz offset = 0;
     sw_http_multipart part;
 
+    assert(sw_http_is(&message, "POST", "/upload"));
+    assert(!sw_http_is(&message, "GET", "/upload"));
+    assert(!sw_http_is(&message, "POST", "/other"));
+    assert(sw_http_get_query(&message, "q", value, sizeof(value)) > 0);
+    assert(strcmp(value, "Jane Doe") == 0);
+    assert(sw_http_get_query(&message, "encoded", value, sizeof(value)) > 0);
+    assert(strcmp(value, "A/B") == 0);
+    assert(sw_http_get_query(&message, "missing", value, sizeof(value)) == 0);
+    assert(strcmp(value, "") == 0);
+    assert(sw_http_get_query(&message, "empty", value, sizeof(value)) == 0);
+    assert(strcmp(value, "") == 0);
+
+    assert(sw_http_get_form(&message, "name", value, sizeof(value)) > 0);
+    assert(strcmp(value, "Jane Doe") == 0);
+    assert(sw_http_get_form(&message, "missing", value, sizeof(value)) == 0);
+    assert(strcmp(value, "") == 0);
     assert(sw_http_get_var(&message, "name", value, sizeof(value)) > 0);
     assert(strcmp(value, "Jane Doe") == 0);
 
@@ -424,6 +440,16 @@ static void test_request_helpers(void) {
     assert(strcmp(part.content_type, "text/plain") == 0);
     assert(strncmp(part.data, "payload", part.data_len) == 0);
     sw_http_multipart_clear(&part);
+}
+
+static void test_utility_helpers(void) {
+    assert(sw_matches_query("Language", "lang", 0));
+    assert(sw_matches_query("Language", "Lang", 1));
+    assert(!sw_matches_query("Language", "lang", 1));
+    assert(sw_matches_query("HTTP Helpers", "", 0));
+    assert(!sw_matches_query("HTTP Helpers", "missing", 0));
+    assert(!sw_matches_query(NULL, "http", 0));
+    assert(!sw_matches_query("HTTP Helpers", NULL, 0));
 }
 
 static char* read_repo_file(const char* relative_path) {
@@ -452,6 +478,22 @@ static void assert_short_surface_only(const char* relative_path) {
 
     assert(strstr(text, "sw" "_html_") == NULL);
     assert(strstr(text, "sw" "_js_") == NULL);
+    assert(strstr(text, "sw" "_kv(") == NULL);
+    assert(strstr(text, "sw" "_tr(") == NULL);
+    assert(strstr(text, "sw" "_bool(") == NULL);
+    assert(strstr(text, "sw" "_txt(") == NULL);
+    assert(strstr(text, "sw" "_txt_tr(") == NULL);
+    assert(strstr(text, "sw" "_title_tr(") == NULL);
+    assert(strstr(text, "sw_hbuf_set" "_tr(") == NULL);
+    assert(strstr(text, "sw_hbuf_get" "_tr(") == NULL);
+    free(text);
+}
+
+static void assert_simple_example_surface(const char* relative_path) {
+    char* text = read_repo_file(relative_path);
+
+    assert(strstr(text, "query[0] = '\\0'") == NULL);
+    assert(strstr(text, "sw_http_get_var(") == NULL);
     free(text);
 }
 
@@ -463,10 +505,17 @@ static void test_public_short_names(void) {
         "tests/test_suite.c",
         "README.md"
     };
+    static const char* const easy_paths[] = {
+        "examples/static.c",
+        "README.md"
+    };
     sz i;
 
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
         assert_short_surface_only(paths[i]);
+    }
+    for (i = 0; i < sizeof(easy_paths) / sizeof(easy_paths[0]); ++i) {
+        assert_simple_example_surface(easy_paths[i]);
     }
 }
 
@@ -642,24 +691,18 @@ static void test_live_server(void) {
     free(response.data);
 
     response = issue_request(mgr, port,
-        "POST /search-preview HTTP/1.1\r\n"
+        "GET /search-preview?q=Language HTTP/1.1\r\n"
         "Host: localhost\r\n"
-        "Content-Type: application/x-www-form-urlencoded\r\n"
-        "Content-Length: 10\r\n"
-        "\r\n"
-        "q=Language");
+        "\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "<!doctype html>") == NULL);
     assert(strstr(response.data, "<p>Language</p>") != NULL);
     free(response.data);
 
     response = issue_request(mgr, port,
-        "POST / HTTP/1.1\r\n"
+        "GET /?q=Language HTTP/1.1\r\n"
         "Host: localhost\r\n"
-        "Content-Type: application/x-www-form-urlencoded\r\n"
-        "Content-Length: 10\r\n"
-        "\r\n"
-        "q=Language");
+        "\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "<!doctype html>") != NULL);
     assert(strstr(response.data, "id=\"sw-search-preview\"") != NULL);
@@ -690,6 +733,7 @@ static const sw_named_test sw_named_tests[] = {
     { "js_short_api", test_js_short_api },
     { "public_short_names", test_public_short_names },
     { "request_helpers", test_request_helpers },
+    { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server }
 };
 

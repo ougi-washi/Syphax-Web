@@ -118,6 +118,11 @@ code{
   display:block;
 }
 
+.sw-search-actions{
+  display:flex;
+  justify-content:flex-start;
+}
+
 .sw-field-label{
   display:block;
   color:var(--text);
@@ -146,6 +151,29 @@ input[type="text"]::placeholder{
 
 input[type="text"]:focus{
   border-color:var(--border-strong);
+  box-shadow:0 0 0 3px rgba(255,255,255,0.04);
+}
+
+.sw-search-button{
+  min-height:40px;
+  padding:10px 14px;
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  background:var(--panel-3);
+  color:var(--text);
+  font:600 0.8rem/1 var(--font-mono);
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  cursor:pointer;
+}
+
+.sw-search-button:hover{
+  border-color:var(--border-strong);
+  background:#202329;
+}
+
+.sw-search-button:focus-visible{
+  outline:none;
   box-shadow:0 0 0 3px rgba(255,255,255,0.04);
 }
 

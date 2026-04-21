@@ -11,6 +11,7 @@ extern "C" {
 SW_API f64 sw_get_time(void);
 SW_API c8* sw_get_file_content(const c8* file_path, sz* buffer_size);
 SW_API b8 sw_generate_unique_filename(const c8* original_name, c8* new_name, sz max_len);
+SW_API b8 sw_matches_query(const c8* text, const c8* query, b8 case_sensitive);
 SW_API u32 sw_random(u32 min, u32 max);
 SW_API b8 sw_hash(const c8* str, c8* hash, sz hash_len);
 
