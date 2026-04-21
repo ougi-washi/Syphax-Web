@@ -4,6 +4,8 @@
 #error "The WSAPoll backend is only available on Windows."
 #endif
 
+#include <stdlib.h>
+
 struct sw_backend {
     int unused;
 };

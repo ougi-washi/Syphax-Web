@@ -1,4 +1,11 @@
+#include "sw_utility.h"
 #include "sw_internal.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 static INIT_ONCE sw_random_once = INIT_ONCE_STATIC_INIT;

@@ -63,6 +63,24 @@ static sz count_occurrences(const char* haystack, const char* needle) {
     return count;
 }
 
+static void repo_path(char* buffer, sz buffer_len, const char* relative_path) {
+    assert(buffer != NULL);
+    assert(buffer_len > 0);
+    assert(relative_path != NULL);
+    assert(snprintf(buffer, buffer_len, "%s/%s", SYPHAX_WEB_SOURCE_DIR, relative_path) > 0);
+}
+
+static void translation_catalog_path(char* buffer, sz buffer_len) {
+    repo_path(buffer, buffer_len, "resources/translations.json");
+}
+
+static void load_fixture_catalog(sw_translator* translator) {
+    char path[1024];
+
+    translation_catalog_path(path, sizeof(path));
+    assert(sw_translator_load_catalog_all_json_file(translator, path));
+}
+
 static void sw_test_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
     sw_test_server_state* state = (sw_test_server_state*)user_data;
     char query[128];
@@ -136,11 +154,56 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 
 static void test_translator(void) {
     sw_translator* translator = sw_translator_create();
+    char catalog_path[1024];
+
     assert(translator != NULL);
+    assert(strcmp(sw_translator_get_language(translator), "") == 0);
+    assert(!sw_translator_set_language(translator, "fr"));
+
+    translation_catalog_path(catalog_path, sizeof(catalog_path));
+
+    assert(sw_translator_load_catalog_all_json_file(translator, catalog_path));
+    assert(sw_translator_set_language(translator, "en"));
+    assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
     assert(sw_translator_set_language(translator, "fr"));
     assert(strcmp(sw_translator_get_language(translator), "fr") == 0);
     assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
     assert(strcmp(sw_translate(translator, "Unknown"), "Unknown") == 0);
+    assert(!sw_translator_load_catalog_all_json_text(translator, "[\"bad\"]"));
+    assert(!sw_translator_load_catalog_all_json_text(translator, "{\"Search\": 1}"));
+    assert(!sw_translator_load_catalog_json_file(translator, "fr", "resources/missing-translations.json"));
+    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
+
+    assert(!sw_translator_load_catalog_json_text(translator, "fr", "[\"bad\"]"));
+    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": 1}"));
+    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\": 1}}"));
+    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\":\"A\",\"fr\":\"B\"}}"));
+    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\":\"A\"}, \"Search\": {\"fr\":\"B\"}}"));
+    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
+
+    assert(sw_translator_set_language(translator, "ja"));
+    assert(strcmp(sw_translate(translator, "Search"), "検索") == 0);
+
+    assert(sw_translator_load_catalog_json_text(translator, "fr",
+        "{"
+            "\"Search\":{\"fr\":\"Chercher\"},"
+            "\"Language\":{\"fr\":\"Langage\"}"
+        "}"));
+    assert(sw_translator_set_language(translator, "fr"));
+    assert(strcmp(sw_translate(translator, "Search"), "Chercher") == 0);
+    assert(strcmp(sw_translate(translator, "Language"), "Langage") == 0);
+    assert(strcmp(sw_translate(translator, "Home"), "Home") == 0);
+
+    assert(sw_translator_load_json_text(translator, "fr",
+        "{"
+            "\"Search\":\"Trouver\","
+            "\"Language\":\"Langue\""
+        "}"));
+    assert(strcmp(sw_translate(translator, "Search"), "Trouver") == 0);
+    assert(strcmp(sw_translate(translator, "Language"), "Langue") == 0);
+
+    assert(sw_translator_set_language(translator, "en"));
+    assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
     sw_translator_destroy(translator);
 }
 
@@ -149,6 +212,7 @@ static void test_html_short_api(void) {
     sw_hbuf* h = sw_hbuf_new();
     const c8* html;
 
+    load_fixture_catalog(translator);
     assert(sw_translator_set_language(translator, "fr"));
     sw_hbuf_set_translator(h, translator);
 
@@ -228,6 +292,7 @@ static void test_html_short_macros(void) {
     sw_hbuf* h = sw_hbuf_new();
     const c8* html;
 
+    load_fixture_catalog(translator);
     assert(sw_translator_set_language(translator, "fr"));
     sw_hbuf_set_translator(h, translator);
 

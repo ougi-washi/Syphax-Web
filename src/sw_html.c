@@ -1,4 +1,8 @@
+#include "sw_html.h"
 #include "sw_internal.h"
+
+#include <ctype.h>
+#include <stdlib.h>
 
 static b8 sw_h_is_root_html(const c8* tag) {
     static const c8 html_tag[] = "html";

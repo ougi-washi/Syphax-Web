@@ -1,4 +1,7 @@
+#include "sw_js.h"
 #include "sw_internal.h"
+
+#include <stdio.h>
 
 static const c8* const sw_j_runtime_chunks[] = {
     "(function(){",

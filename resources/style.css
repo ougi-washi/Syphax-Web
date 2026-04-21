@@ -13,7 +13,9 @@
   --radius:2px;
   --radius-pill:3px;
   --max-width:760px;
-  --font-sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-sans:"Noto Sans","Noto Sans Arabic","Noto Sans JP",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-sans-ar:"Noto Naskh Arabic","Noto Sans Arabic","Amiri","Geeza Pro",Tahoma,sans-serif;
+  --font-sans-ja:"Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
 
@@ -57,9 +59,17 @@ body{
   margin-top:16px;
 }
 
+html[dir="rtl"] .sw-shell{
+  text-align:right;
+}
+
 .sw-preview-shell > * + *,
 .sw-search-form > * + *{
   margin-top:12px;
+}
+
+.sw-language-bar > * + *{
+  margin-top:10px;
 }
 
 h1,
@@ -95,6 +105,11 @@ code{
   color:var(--muted);
 }
 
+html[dir="rtl"] .sw-list{
+  padding-left:0;
+  padding-right:18px;
+}
+
 .sw-list li + li{
   margin-top:10px;
 }
@@ -121,6 +136,16 @@ code{
 .sw-search-actions{
   display:flex;
   justify-content:flex-start;
+}
+
+.sw-language-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+
+.sw-language-form{
+  margin:0;
 }
 
 .sw-field-label{
@@ -154,6 +179,7 @@ input[type="text"]:focus{
   box-shadow:0 0 0 3px rgba(255,255,255,0.04);
 }
 
+.sw-language-button,
 .sw-search-button{
   min-height:40px;
   padding:10px 14px;
@@ -167,11 +193,22 @@ input[type="text"]:focus{
   cursor:pointer;
 }
 
+.sw-language-button{
+  min-width:84px;
+}
+
+.sw-language-button.is-active{
+  border-color:var(--border-strong);
+  background:#202329;
+}
+
+.sw-language-button:hover,
 .sw-search-button:hover{
   border-color:var(--border-strong);
   background:#202329;
 }
 
+.sw-language-button:focus-visible,
 .sw-search-button:focus-visible{
   outline:none;
   box-shadow:0 0 0 3px rgba(255,255,255,0.04);
@@ -219,6 +256,56 @@ input[type="text"]:focus{
   border-radius:var(--radius);
   background:var(--panel-3);
   color:var(--muted);
+}
+
+html[lang="ar"] body{
+  font-family:var(--font-sans-ar);
+}
+
+html[lang="ja"] body{
+  font-family:var(--font-sans-ja);
+}
+
+html[lang="ar"] h1,
+html[lang="ar"] h2,
+html[lang="ar"] .sw-field-label,
+html[lang="ar"] .sw-list strong,
+html[lang="ar"] .sw-language-button,
+html[lang="ar"] .sw-search-button,
+html[lang="ar"] input[type="text"],
+html[lang="ar"] .sw-chip,
+html[lang="ja"] h1,
+html[lang="ja"] h2,
+html[lang="ja"] .sw-field-label,
+html[lang="ja"] .sw-list strong,
+html[lang="ja"] .sw-language-button,
+html[lang="ja"] .sw-search-button,
+html[lang="ja"] input[type="text"],
+html[lang="ja"] .sw-chip{
+  letter-spacing:normal;
+  text-transform:none;
+}
+
+html[lang="ar"] h1,
+html[lang="ar"] h2,
+html[lang="ar"] .sw-field-label,
+html[lang="ar"] .sw-list strong,
+html[lang="ar"] .sw-language-button,
+html[lang="ar"] .sw-search-button,
+html[lang="ar"] input[type="text"],
+html[lang="ar"] .sw-chip{
+  font-family:var(--font-sans-ar);
+}
+
+html[lang="ja"] h1,
+html[lang="ja"] h2,
+html[lang="ja"] .sw-field-label,
+html[lang="ja"] .sw-list strong,
+html[lang="ja"] .sw-language-button,
+html[lang="ja"] .sw-search-button,
+html[lang="ja"] input[type="text"],
+html[lang="ja"] .sw-chip{
+  font-family:var(--font-sans-ja);
 }
 
 ::selection{

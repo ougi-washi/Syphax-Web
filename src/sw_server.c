@@ -1,7 +1,15 @@
 #include "sw_backend.h"
-#include "sw_internal.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+
+#if !defined(_WIN32)
+#    include <signal.h>
+#endif
 
 typedef enum {
     SW_PARSE_PENDING = 0,

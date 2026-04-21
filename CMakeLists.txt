@@ -52,6 +52,10 @@ set(SYPHAX_WEB_VENDOR_HEADERS
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
 )
 
+set(SYPHAX_WEB_TRANSLATION_CATALOG
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/translations.json
+)
+
 set(SYPHAX_WEB_SOURCES
     ${SYPHAX_WEB_SRC_DIR}/sw_utility.c
     ${SYPHAX_WEB_SRC_DIR}/sw_translator.c
@@ -112,6 +116,7 @@ if(SYPHAX_WEB_BUILD_EXAMPLES)
     add_executable(syphax_web_static_example examples/static.c)
     target_link_libraries(syphax_web_static_example PRIVATE syphax_web::syphax_web)
     target_compile_features(syphax_web_static_example PRIVATE c_std_11)
+    target_compile_definitions(syphax_web_static_example PRIVATE SYPHAX_WEB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     set_target_properties(syphax_web_static_example PROPERTIES OUTPUT_NAME syphax_web_static)
     syphax_web_set_runtime_output(syphax_web_static_example)
     if(SYPHAX_WEB_ENABLE_WARNINGS)
@@ -163,6 +168,9 @@ install(FILES
     ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/syphax
+)
+install(FILES ${SYPHAX_WEB_TRANSLATION_CATALOG}
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/syphax_web
 )
 
 configure_package_config_file(

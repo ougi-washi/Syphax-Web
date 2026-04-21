@@ -15,7 +15,7 @@ The project is packaged as a library first, with examples and tests as optional 
 - Platform-neutral public headers directly under `include/`
 - Safe growable HTML builder with short tag macros
 - Shared inline JS runtime with reusable behavior helpers
-- Explicit translator context instead of global header state
+- Explicit translator context loaded from JSON files
 - Internal dynamic storage powered by the vendored `lib/syphax` submodule
 
 ## Layout
@@ -126,6 +126,7 @@ When you bind to `0.0.0.0`, open `http://127.0.0.1:8000` or your machine's actua
 - Use `sw_j_live_search()` when you want the common live-search pattern without spelling out every JS option.
 - Use the more generic `sw_j_*` helpers when you need custom behavior.
 - Keep HTTP response writing separate from HTML generation.
+- Load translations explicitly from `resources/translations.json` or your own locale data through `sw_translator_load_catalog_all_json_file()`, `sw_translator_load_catalog_all_json_text()`, `sw_translator_load_catalog_json_*()`, or the lower-level flat `sw_translator_load_json_*()` helpers.
 
 ```c
 #include "sw_js.h"
@@ -163,9 +164,44 @@ static void render_search_panel(sw_hbuf* h) {
 
 With `SYPHAX_WEB_BUILD_EXAMPLES=ON`, the repository builds `bin/syphax_web_static`, which serves:
 
-- `/` with HTML generated through the short tag API and query-string driven search
+- `/` with HTML generated through the short tag API, query-string driven search, and `en` / `fr` / `ar` / `ja` language buttons backed by the JSON translator
 - `/style.css` directly from `resources/style.css`
 - `/search-preview`, which returns an HTML fragment that the root page swaps into an inline preview div on each character input
+
+## Translator JSON
+
+Translations are no longer compiled into the library. The bundled example uses one catalog file with source strings as keys, so English does not need to be rewritten into a separate `en.json`:
+
+```json
+{
+  "Search": {
+    "fr": "Rechercher",
+    "ar": "بحث",
+    "ja": "検索"
+  },
+  "Language": {
+    "fr": "Langue",
+    "ar": "اللغة",
+    "ja": "言語"
+  }
+}
+```
+
+Load and select a language explicitly:
+
+```c
+#include "sw_translator.h"
+
+sw_translator* translator = sw_translator_create();
+sw_translator_load_catalog_all_json_file(translator, "resources/translations.json");
+sw_translator_set_language(translator, "fr");
+```
+
+`sw_translator_load_catalog_all_json_*()` also registers `en` automatically as the source-language fallback, so the shared catalog does not need duplicated English values.
+
+If you already have a flat one-language object such as `{"Search":"Rechercher"}`, you can still load it through `sw_translator_load_json_file()` or `sw_translator_load_json_text()`.
+
+Installed packages also install the checked-in catalog file under `share/syphax_web/translations.json`.
 
 ## Notes
 

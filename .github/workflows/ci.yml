@@ -42,7 +42,9 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Install smoke test
-        run: cmake --install build --prefix "${{ github.workspace }}/install"
+        run: |
+          cmake --install build --prefix "${{ github.workspace }}/install"
+          test -f "${{ github.workspace }}/install/share/syphax_web/translations.json"
 
   windows:
     name: Windows
@@ -83,4 +85,6 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Install smoke test
-        run: cmake --install build --prefix "$PWD/install"
+        run: |
+          cmake --install build --prefix "$PWD/install"
+          test -f "$PWD/install/share/syphax_web/translations.json"

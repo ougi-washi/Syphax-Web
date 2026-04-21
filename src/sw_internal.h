@@ -8,25 +8,11 @@
 #endif
 
 #include "syphax/s_array.h"
-#include "sw_html.h"
-#include "sw_js.h"
 #include "sw_server.h"
 #include "sw_translator.h"
-#include "sw_utility.h"
 
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
-#if !defined(_WIN32)
-#    include <strings.h>
-#endif
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -35,16 +21,13 @@
 #    include <winsock2.h>
 #    include <ws2tcpip.h>
 #    include <windows.h>
-#    include <sys/stat.h>
 typedef SOCKET sw_socket;
 #    define SW_INVALID_SOCKET INVALID_SOCKET
 #else
 #    include <arpa/inet.h>
 #    include <fcntl.h>
 #    include <netdb.h>
-#    include <signal.h>
 #    include <sys/socket.h>
-#    include <sys/stat.h>
 #    include <sys/types.h>
 #    include <unistd.h>
 typedef int sw_socket;
@@ -74,13 +57,34 @@ typedef struct {
     sw_connection** tag;
 } sw_connection_array;
 
+typedef struct {
+    c8* key;
+    c8* value;
+} sw_translation_item;
+
+typedef struct {
+    s_array_base b;
+    sw_translation_item* tag;
+} sw_translation_item_array;
+
+typedef struct {
+    c8* code;
+    sw_translation_item_array items;
+} sw_translation_language;
+
+typedef struct {
+    s_array_base b;
+    sw_translation_language* tag;
+} sw_translation_language_array;
+
 typedef enum {
     SW_SOURCE_LISTENER = 1,
     SW_SOURCE_CONNECTION = 2
 } sw_source_kind;
 
 struct sw_translator {
-    sz current_language;
+    sw_translation_language_array languages;
+    s_handle current_language;
 };
 
 struct sw_hbuf {
