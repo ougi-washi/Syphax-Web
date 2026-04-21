@@ -83,7 +83,7 @@ struct sw_translator {
     sz current_language;
 };
 
-struct sw_html_buffer {
+struct sw_hbuf {
     sw_char_array bytes;
     const sw_translator* translator;
     b8 html_doctype_emitted;

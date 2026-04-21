@@ -22,7 +22,7 @@ static const sw_example_feature sw_example_features[] = {
     { "Login", "Pages are easier to split into small C render functions." }
 };
 
-static void render_preview_status(sw_html_buffer* html, const c8* query, sz match_count);
+static void render_preview_status(sw_hbuf* h, const c8* query, sz match_count);
 
 static void render_stylesheet(sw_connection* connection) {
     sw_http_serve_file(connection, "resources/style.css");
@@ -69,31 +69,32 @@ static b8 sw_feature_matches_query(const sw_example_feature* feature, const c8* 
         || sw_contains_case_insensitive(feature->body, query);
 }
 
-static void render_feature(sw_html_buffer* html, const sw_example_feature* feature) {
-    sw_html_open_tag(html, "li", NULL, 0);
-    sw_html_open_tag(html, "strong", sw_html_attr_items(sw_html_attr_kv("data-component", "feature-title")));
-    sw_html_text_tr(html, feature->title);
-    sw_html_close_tag(html, "strong");
-    sw_html_text(html, feature->body);
-    sw_html_close_tag(html, "li");
+static void render_feature(sw_hbuf* h, const sw_example_feature* feature) {
+    sw_li(h, sw_no_attrs, {
+        sw_strong(h, sw_attrs(sw_kv("data-component", "feature-title")), {
+            sw_txt_tr(h, feature->title);
+        });
+        sw_txt(h, feature->body);
+    });
 }
 
-static sz render_feature_list(sw_html_buffer* html, const c8* query) {
+static sz render_feature_list(sw_hbuf* h, const c8* query) {
     sz i;
     sz rendered = 0;
 
-    sw_html_open_tag(html, "ul", sw_html_attr_items(
-        sw_html_attr_kv("class", "sw-list"),
-        sw_html_attr_kv("data-component", "feature-list")
-    ));
-    for (i = 0; i < sizeof(sw_example_features) / sizeof(sw_example_features[0]); ++i) {
-        if (query != NULL && query[0] != '\0' && !sw_feature_matches_query(&sw_example_features[i], query)) {
-            continue;
+    sw_ul(h, sw_attrs(
+        sw_kv("class", "sw-list"),
+        sw_kv("data-component", "feature-list")
+    ), {
+        for (i = 0; i < sizeof(sw_example_features) / sizeof(sw_example_features[0]); ++i) {
+            if (query != NULL && query[0] != '\0' && !sw_feature_matches_query(&sw_example_features[i], query)) {
+                continue;
+            }
+            render_feature(h, &sw_example_features[i]);
+            rendered += 1;
         }
-        render_feature(html, &sw_example_features[i]);
-        rendered += 1;
-    }
-    sw_html_close_tag(html, "ul");
+    });
+
     return rendered;
 }
 
@@ -110,159 +111,158 @@ static sz count_matching_features(const c8* query) {
     return match_count;
 }
 
-static void render_preview_fragment(sw_html_buffer* html, const c8* query) {
+static void render_preview_fragment(sw_hbuf* h, const c8* query) {
     const sz match_count = count_matching_features(query);
 
-    sw_html_open_tag(html, "section", sw_html_attr_items(
-        sw_html_attr_kv("class", "sw-preview-shell"),
-        sw_html_attr_kv("data-component", "search-preview")
-    ));
-    sw_html_open_tag(html, "h2", NULL, 0);
-    sw_html_text_tr(html, "Search");
-    sw_html_close_tag(html, "h2");
+    sw_section(h, sw_attrs(
+        sw_kv("class", "sw-preview-shell"),
+        sw_kv("data-component", "search-preview")
+    ), {
+        sw_h2(h, sw_no_attrs, {
+            sw_txt_tr(h, "Search");
+        });
 
-    render_preview_status(html, query, match_count);
-    if (query != NULL && query[0] != '\0' && match_count > 0) {
-        sw_html_open_tag(html, "div", sw_html_attr_items(sw_html_attr_kv("class", "sw-preview-results")));
-        render_feature_list(html, query);
-        sw_html_close_tag(html, "div");
-    }
-    sw_html_close_tag(html, "section");
+        render_preview_status(h, query, match_count);
+        if (query != NULL && query[0] != '\0' && match_count > 0) {
+            sw_div(h, sw_attrs(sw_kv("class", "sw-preview-results")), {
+                render_feature_list(h, query);
+            });
+        }
+    });
 }
 
-static void render_search_demo(sw_html_buffer* html, const c8* query) {
-    sw_html_open_tag(html, "p", sw_html_attr_items(sw_html_attr_kv("class", "sw-search-copy")));
-    sw_html_text_tr(html, "Search");
-    sw_html_raw(html, " updates an inline preview as you type, using reusable helpers emitted directly from the library.");
-    sw_html_close_tag(html, "p");
+static void render_search_demo(sw_hbuf* h, const c8* query) {
+    sw_p(h, sw_attrs(sw_kv("class", "sw-search-copy")), {
+        sw_txt_tr(h, "Search");
+        sw_raw(h, " updates an inline preview as you type, using reusable helpers emitted directly from the library.");
+    });
 
-    sw_html_open_tag(html, "form", sw_html_attr_items(
-        sw_html_attr_kv("id", "sw-search-form"),
-        sw_html_attr_kv("class", "sw-search-form"),
-        sw_html_attr_kv("action", "/"),
-        sw_html_attr_kv("method", "post"),
-        sw_html_attr_bool("novalidate", 1)
-    ));
-    sw_html_open_tag(html, "label", sw_html_attr_items(
-        sw_html_attr_kv("class", "sw-field-label"),
-        sw_html_attr_kv("for", "sw-search-query")
-    ));
-    sw_html_text_tr(html, "Search");
-    sw_html_close_tag(html, "label");
-    sw_html_void_tag(html, "input", sw_html_attr_items(
-        sw_html_attr_kv("id", "sw-search-query"),
-        sw_html_attr_kv("class", "sw-search-input"),
-        sw_html_attr_kv("type", "text"),
-        sw_html_attr_kv("name", "q"),
-        sw_html_attr_kv_tr("placeholder", "Search"),
-        sw_html_attr_kv("value", (query != NULL) ? query : ""),
-        sw_html_attr_kv("autocomplete", "off"),
-        sw_html_attr_kv("spellcheck", "false")
-    ));
-    sw_html_open_tag(html, "p", sw_html_attr_items(sw_html_attr_kv("class", "sw-search-hint")));
-    sw_html_raw(html, "Type to filter the feature list below. The page emits its live-search behavior from C, and pressing Enter still works without JavaScript.");
-    sw_html_close_tag(html, "p");
-    sw_html_close_tag(html, "form");
+    sw_form(h, sw_attrs(
+        sw_kv("id", "sw-search-form"),
+        sw_kv("class", "sw-search-form"),
+        sw_kv("action", "/"),
+        sw_kv("method", "post"),
+        sw_bool("novalidate", 1)
+    ), {
+        sw_label(h, sw_attrs(
+            sw_kv("class", "sw-field-label"),
+            sw_kv("for", "sw-search-query")
+        ), {
+            sw_txt_tr(h, "Search");
+        });
+        sw_input(h, sw_attrs(
+            sw_kv("id", "sw-search-query"),
+            sw_kv("class", "sw-search-input"),
+            sw_kv("type", "text"),
+            sw_kv("name", "q"),
+            sw_tr("placeholder", "Search"),
+            sw_kv("value", (query != NULL) ? query : ""),
+            sw_kv("autocomplete", "off"),
+            sw_kv("spellcheck", "false")
+        ));
+        sw_p(h, sw_attrs(sw_kv("class", "sw-search-hint")), {
+            sw_raw(h, "Type to filter the feature list below. The page emits its live-search behavior from C, and pressing Enter still works without JavaScript.");
+        });
+    });
 
-    sw_html_open_tag(html, "div", sw_html_attr_items(
-        sw_html_attr_kv("id", "sw-search-preview"),
-        sw_html_attr_kv("class", "sw-preview-region"),
-        sw_html_attr_kv("aria-live", "polite")
-    ));
-    render_preview_fragment(html, query);
-    sw_html_close_tag(html, "div");
+    sw_div(h, sw_attrs(
+        sw_kv("id", "sw-search-preview"),
+        sw_kv("class", "sw-preview-region"),
+        sw_kv("aria-live", "polite")
+    ), {
+        render_preview_fragment(h, query);
+    });
 }
 
-static void render_preview_status(sw_html_buffer* html, const c8* query, sz match_count) {
+static void render_preview_status(sw_hbuf* h, const c8* query, sz match_count) {
     if (query == NULL || query[0] == '\0') {
-        sw_html_open_tag(html, "div", sw_html_attr_items(sw_html_attr_kv("class", "sw-empty-state")));
-        sw_html_text(html, "Type in the search field to preview matching feature cards here.");
-        sw_html_close_tag(html, "div");
+        sw_div(h, sw_attrs(sw_kv("class", "sw-empty-state")), {
+            sw_txt(h, "Type in the search field to preview matching feature cards here.");
+        });
         return;
     }
 
-    sw_html_open_tag(html, "div", sw_html_attr_items(sw_html_attr_kv("class", "sw-result-meta")));
-    sw_html_open_tag(html, "span", sw_html_attr_items(sw_html_attr_kv("class", "sw-chip")));
-    sw_html_rawf(html, "%zu match%s", match_count, (match_count == 1) ? "" : "es");
-    sw_html_close_tag(html, "span");
-    sw_html_open_tag(html, "span", NULL, 0);
-    sw_html_text(html, "Query:");
-    sw_html_raw(html, " ");
-    sw_html_open_tag(html, "code", sw_html_attr_items(sw_html_attr_kv("class", "sw-search-term")));
-    sw_html_text(html, query);
-    sw_html_close_tag(html, "code");
-    sw_html_close_tag(html, "span");
-    sw_html_close_tag(html, "div");
+    sw_div(h, sw_attrs(sw_kv("class", "sw-result-meta")), {
+        sw_span(h, sw_attrs(sw_kv("class", "sw-chip")), {
+            sw_rawf(h, "%zu match%s", match_count, (match_count == 1) ? "" : "es");
+        });
+        sw_span(h, sw_no_attrs, {
+            sw_txt(h, "Query:");
+            sw_raw(h, " ");
+            sw_code(h, sw_attrs(sw_kv("class", "sw-search-term")), {
+                sw_txt(h, query);
+            });
+        });
+    });
 
     if (match_count == 0) {
-        sw_html_open_tag(html, "div", sw_html_attr_items(sw_html_attr_kv("class", "sw-empty-state")));
-        sw_html_text(html, "No matching example features.");
-        sw_html_close_tag(html, "div");
+        sw_div(h, sw_attrs(sw_kv("class", "sw-empty-state")), {
+            sw_txt(h, "No matching example features.");
+        });
     }
 }
 
 static void render_search_preview(sw_connection* connection, sw_example_state* state, const c8* query) {
-    sw_html_buffer* html = sw_html_buffer_create();
+    sw_hbuf* h = sw_hbuf_new();
 
-    sw_html_buffer_set_translator(html, state->translator);
-    render_preview_fragment(html, query);
-    sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_html_buffer_data(html), sw_html_buffer_size(html));
-    sw_html_buffer_destroy(html);
+    sw_hbuf_set_tr(h, state->translator);
+    render_preview_fragment(h, query);
+    sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_hbuf_data(h), sw_hbuf_len(h));
+    sw_hbuf_free(h);
 }
 
 static void render_root(sw_connection* connection, sw_example_state* state, const c8* query) {
-    sw_html_buffer* html = sw_html_buffer_create();
-    const sw_js_live_search_options live_search = {
-        .form_id = "sw-search-form",
-        .input_id = "sw-search-query",
-        .target_id = "sw-search-preview",
-        .endpoint = "/search-preview",
-        .value_param = "q",
-        .loading_class = "is-loading",
-        .debounce_ms = 120,
-        .method = SW_JS_HTTP_POST,
-        .swap_mode = SW_JS_SWAP_INNER_HTML,
-        .serialize_form = 1,
-        .abort_stale = 1,
-        .prevent_submit = 1
-    };
+    sw_hbuf* h = sw_hbuf_new();
 
-    sw_html_buffer_set_translator(html, state->translator);
+    sw_hbuf_set_tr(h, state->translator);
 
-    sw_html_open_tag(html, "html", sw_html_attr_items(
-        sw_html_attr_kv("lang", sw_translator_get_language(state->translator)),
-        sw_html_attr_kv("data-app", "syphax-web")
-    ));
-    sw_html_open_tag(html, "head", NULL, 0);
-    sw_html_meta_charset(html, "utf-8");
-    sw_html_title_tr(html, "Syphax Web");
-    sw_html_void_tag(html, "link", sw_html_attr_items(
-        sw_html_attr_kv("rel", "stylesheet"),
-        sw_html_attr_kv("href", "/style.css")
-    ));
-    sw_html_close_tag(html, "head");
+    sw_html(h, sw_attrs(
+        sw_kv("lang", sw_translator_get_language(state->translator)),
+        sw_kv("data-app", "syphax-web")
+    ), {
+        sw_head(h, sw_no_attrs, {
+            sw_meta_charset(h, "utf-8");
+            sw_title_tr(h, "Syphax Web");
+            sw_link(h, sw_attrs(
+                sw_kv("rel", "stylesheet"),
+                sw_kv("href", "/style.css")
+            ));
+        });
 
-    sw_html_open_tag(html, "body", sw_html_attr_items(sw_html_attr_kv("class", "sw-body")));
-    sw_html_open_tag(html, "main", sw_html_attr_items(
-        sw_html_attr_kv("class", "sw-shell"),
-        sw_html_attr_kv("data-component", "page-shell")
-    ));
-    sw_html_open_tag(html, "h1", NULL, 0);
-    sw_html_text_tr(html, "Syphax Web");
-    sw_html_close_tag(html, "h1");
+        sw_body(h, sw_attrs(sw_kv("class", "sw-body")), {
+            sw_main(h, sw_attrs(
+                sw_kv("class", "sw-shell"),
+                sw_kv("data-component", "page-shell")
+            ), {
+                sw_h1(h, sw_no_attrs, {
+                    sw_txt_tr(h, "Syphax Web");
+                });
 
-    render_search_demo(html, query);
-    sw_js_live_search(html, &live_search);
-    render_feature_list(html, NULL);
-    sw_html_open_tag(html, "p", NULL, 0);
-    sw_html_raw(html, "Static assets are served from the resources directory through the same library API.");
-    sw_html_close_tag(html, "p");
-    sw_html_close_tag(html, "main");
-    sw_html_close_tag(html, "body");
-    sw_html_close_tag(html, "html");
+                render_search_demo(h, query);
+                sw_j_live(h,
+                    .form_id = "sw-search-form",
+                    .input_id = "sw-search-query",
+                    .target_id = "sw-search-preview",
+                    .endpoint = "/search-preview",
+                    .value_param = "q",
+                    .loading_class = "is-loading",
+                    .debounce_ms = 120,
+                    .method = SW_J_POST,
+                    .swap_mode = SW_J_INNER,
+                    .serialize_form = 1,
+                    .abort_stale = 1,
+                    .prevent_submit = 1
+                );
+                render_feature_list(h, NULL);
+                sw_p(h, sw_no_attrs, {
+                    sw_raw(h, "Static assets are served from the resources directory through the same library API.");
+                });
+            });
+        });
+    });
 
-    sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_html_buffer_data(html), sw_html_buffer_size(html));
-    sw_html_buffer_destroy(html);
+    sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_hbuf_data(h), sw_hbuf_len(h));
+    sw_hbuf_free(h);
 }
 
 static void http_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
