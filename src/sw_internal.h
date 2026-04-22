@@ -36,46 +36,29 @@ typedef int sw_socket;
 
 typedef struct sw_backend sw_backend;
 typedef struct sw_listener sw_listener;
+typedef struct sw_connection sw_connection;
 
-typedef struct {
-    s_array_base b;
-    c8* tag;
-} sw_char_array;
+typedef s_array(c8, sw_char_array);
 
-typedef struct {
-    s_array_base b;
-    sw_http_header* tag;
-} sw_http_header_array;
+typedef s_array(sw_http_header, sw_http_header_array);
 
-typedef struct {
-    s_array_base b;
-    sw_listener** tag;
-} sw_listener_array;
+typedef s_array(sw_listener*, sw_listener_array);
 
-typedef struct {
-    s_array_base b;
-    sw_connection** tag;
-} sw_connection_array;
+typedef s_array(sw_connection*, sw_connection_array);
 
 typedef struct {
     c8* key;
     c8* value;
 } sw_translation_item;
 
-typedef struct {
-    s_array_base b;
-    sw_translation_item* tag;
-} sw_translation_item_array;
+typedef s_array(sw_translation_item, sw_translation_item_array);
 
 typedef struct {
     c8* code;
     sw_translation_item_array items;
 } sw_translation_language;
 
-typedef struct {
-    s_array_base b;
-    sw_translation_language* tag;
-} sw_translation_language_array;
+typedef s_array(sw_translation_language, sw_translation_language_array);
 
 typedef enum {
     SW_SOURCE_LISTENER = 1,

@@ -783,7 +783,7 @@ u16 sw_mgr_get_listener_port(const sw_mgr* mgr, sz listener_index) {
     if (mgr == NULL || listener_index >= s_array_get_size(&mgr->listeners)) {
         return 0;
     }
-    listeners = (sw_listener* const*)mgr->listeners.b.data;
+    listeners = (sw_listener* const*)s_array_get_data((sw_listener_array*)&mgr->listeners);
     return listeners[listener_index]->bound_port;
 }
 

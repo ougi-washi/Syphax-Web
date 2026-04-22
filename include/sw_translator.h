@@ -3,12 +3,22 @@
 
 #include "sw_export.h"
 #include "syphax/s_types.h"
+#include "syphax/s_array.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef struct sw_language {
+    const c8* code;
+    const c8* label;
+    const c8* direction;
+} sw_language;
+typedef s_array(sw_language, sw_languages);
 typedef struct sw_translator sw_translator;
+
+SW_API void sw_add_language_internal(sw_translator* translator, const sw_language* language);
+#define sw_add_language(translator, ...) sw_add_language_internal(translator, &(sw_language){__VA_ARGS__})
 
 SW_API sw_translator* sw_translator_create(void);
 SW_API void sw_translator_destroy(sw_translator* translator);

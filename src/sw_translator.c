@@ -16,8 +16,8 @@ static void sw_translation_items_free(sw_translation_item_array* items) {
         return;
     }
 
-    data = (sw_translation_item*)items->b.data;
-    for (i = 0; i < items->b.size; ++i) {
+    data = s_array_get_data(items);
+    for (i = 0; i < s_array_get_size(items); ++i) {
         free(data[i].key);
         free(data[i].value);
     }
@@ -33,8 +33,8 @@ static void sw_translation_languages_free(sw_translation_language_array* languag
         return;
     }
 
-    data = (sw_translation_language*)languages->b.data;
-    for (i = 0; i < languages->b.size; ++i) {
+    data = s_array_get_data(languages);
+    for (i = 0; i < s_array_get_size(languages); ++i) {
         sw_translation_language_dispose(&data[i]);
     }
 
@@ -66,8 +66,8 @@ static sw_translation_language* sw_translator_find_language(
         return NULL;
     }
 
-    data = (sw_translation_language*)translator->languages.b.data;
-    for (i = 0; i < translator->languages.b.size; ++i) {
+    data = s_array_get_data(&translator->languages);
+    for (i = 0; i < s_array_get_size(&translator->languages); ++i) {
         if (data[i].code != NULL && strcmp(data[i].code, lang) == 0) {
             if (out_handle != NULL) {
                 *out_handle = s_array_handle(&translator->languages, (u32)i);
@@ -98,8 +98,8 @@ static b8 sw_translation_items_has_key(const sw_translation_item_array* items, c
         return 0;
     }
 
-    data = (sw_translation_item*)items->b.data;
-    for (i = 0; i < items->b.size; ++i) {
+    data = s_array_get_data((sw_translation_item_array*)items);
+    for (i = 0; i < s_array_get_size(items); ++i) {
         if (strcmp(data[i].key, key) == 0) {
             return 1;
         }
@@ -116,8 +116,8 @@ static b8 sw_translation_languages_has_code(const sw_translation_language_array*
         return 0;
     }
 
-    data = (sw_translation_language*)languages->b.data;
-    for (i = 0; i < languages->b.size; ++i) {
+    data = s_array_get_data((sw_translation_language_array*)languages);
+    for (i = 0; i < s_array_get_size(languages); ++i) {
         if (data[i].code != NULL && strcmp(data[i].code, code) == 0) {
             return 1;
         }
@@ -408,13 +408,14 @@ static b8 sw_translator_collect_catalog_languages(sw_translation_language_array*
         }
     }
 
-    return languages->b.size > 0;
+    return s_array_get_size(languages) > 0;
 }
 
 static b8 sw_translator_load_catalog_all_text(sw_translator* translator, const c8* json_text) {
     s_json_error error = {0};
     s_json* root;
     sw_translation_language_array languages;
+    sw_translation_language* data;
     sz i;
 
     if (translator == NULL || json_text == NULL) {
@@ -433,8 +434,9 @@ static b8 sw_translator_load_catalog_all_text(sw_translator* translator, const c
 
     s_json_free(root);
 
-    for (i = 0; i < languages.b.size; ++i) {
-        sw_translation_language* language = &((sw_translation_language*)languages.b.data)[i];
+    data = s_array_get_data(&languages);
+    for (i = 0; i < s_array_get_size(&languages); ++i) {
+        sw_translation_language* language = &data[i];
 
         if (!sw_translator_store_language(translator, language)) {
             sw_translation_languages_free(&languages);
@@ -481,8 +483,8 @@ void sw_translator_destroy(sw_translator* translator) {
         return;
     }
 
-    data = (sw_translation_language*)translator->languages.b.data;
-    for (i = 0; i < translator->languages.b.size; ++i) {
+    data = s_array_get_data(&translator->languages);
+    for (i = 0; i < s_array_get_size(&translator->languages); ++i) {
         sw_translation_language_dispose(&data[i]);
     }
 
@@ -548,8 +550,8 @@ const c8* sw_translate(const sw_translator* translator, const c8* str) {
         return str;
     }
 
-    items = (sw_translation_item*)language->items.b.data;
-    for (i = 0; i < language->items.b.size; ++i) {
+    items = s_array_get_data((sw_translation_item_array*)&language->items);
+    for (i = 0; i < s_array_get_size(&language->items); ++i) {
         if (strcmp(str, items[i].key) == 0) {
             return items[i].value;
         }
