@@ -65,8 +65,8 @@ static void handler(sw_connection* c, const sw_http_message* hm, void* user_data
     sw_buffer* buffer = sw_buffer_new();
 
     sw_html(buffer, sw_attrs(sw_attr("lang", "en")), {
-        sw_body(buffer, sw_no_attrs, {
-            sw_h1(buffer, sw_no_attrs, {
+        sw_body(buffer, sw_attrs(), {
+            sw_h1(buffer, sw_attrs(), {
                 sw_text(buffer, "Syphax Web");
             });
         });

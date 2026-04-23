@@ -172,14 +172,14 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     if (sw_http_is(request, "GET", "/")) {
         sw_buffer* h = sw_buffer_new();
         assert(sw_http_get_query(request, "q", query, sizeof(query)) >= 0);
-        sw_html(h, sw_no_attrs, {
-            sw_body(h, sw_no_attrs, {
-                sw_h1(h, sw_no_attrs, {
+        sw_html(h, sw_attrs(), {
+            sw_body(h, sw_attrs(), {
+                sw_h1(h, sw_attrs(), {
                     sw_text(h, "Syphax Web");
                 });
                 sw_div(h, sw_attrs(sw_attr("id", "sw-search-preview")), {
                     sw_section(h, sw_attrs(sw_attr("class", "sw-preview-shell")), {
-                        sw_p(h, sw_no_attrs, {
+                        sw_p(h, sw_attrs(), {
                             if (query[0] == '\0') {
                                 sw_text(h, "Type to search.");
                             } else {
@@ -223,7 +223,7 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
         assert(h != NULL);
         assert(sw_http_get_query(request, "q", query, sizeof(query)) >= 0);
         sw_section(h, sw_attrs(sw_attr("class", "sw-preview-shell")), {
-            sw_p(h, sw_no_attrs, {
+            sw_p(h, sw_attrs(), {
                 if (query[0] == '\0') {
                     sw_text(h, "Type to search.");
                 } else {
@@ -375,7 +375,7 @@ static void test_html_short_api(void) {
     assert(strstr(html, ">Search搜索</div>") != NULL);
 
     sw_buffer_reset(h);
-    assert(sw_tag(h, "HTML", sw_no_attrs));
+    assert(sw_tag(h, "HTML", sw_attrs()));
     assert(sw_end(h, "HTML"));
     html = sw_buffer_data(h);
     assert(strstr(html, "<!doctype html><HTML") != NULL);
@@ -383,7 +383,7 @@ static void test_html_short_api(void) {
 
     sw_buffer_reset(h);
     assert(sw_translator_set_language(translator, "ar"));
-    assert(sw_tag(h, "html", sw_no_attrs));
+    assert(sw_tag(h, "html", sw_attrs()));
     assert(sw_end(h, "html"));
     html = sw_buffer_data(h);
     assert(strstr(html, "<html lang=\"ar\" dir=\"rtl\">") != NULL);
@@ -417,25 +417,25 @@ static void test_html_short_api(void) {
     assert(strstr(html, "<div dir=\"ltr\" data-sw-direction=\"ttb\" style=\"border-color:currentColor;writing-mode:vertical-rl;text-orientation:mixed;\">搜索</div>") != NULL);
 
     sw_buffer_reset(h);
-    assert(sw_tag(h, "section", sw_no_attrs));
+    assert(sw_tag(h, "section", sw_attrs()));
     assert(sw_end(h, "section"));
     assert(strstr(sw_buffer_data(h), "<!doctype html>") == NULL);
 
     sw_buffer_reset(h);
     assert(sw_text_no_translate(h, "prefix"));
-    assert(sw_tag(h, "html", sw_no_attrs));
+    assert(sw_tag(h, "html", sw_attrs()));
     assert(sw_end(h, "html"));
     html = sw_buffer_data(h);
     assert(strstr(html, "<!doctype html>") == NULL);
     assert(strstr(html, "prefix<html lang=\"zh\" dir=\"ltr\"></html>") != NULL);
 
     sw_buffer_reset(h);
-    assert(sw_tag(h, "html", sw_no_attrs));
+    assert(sw_tag(h, "html", sw_attrs()));
     assert(sw_end(h, "html"));
     assert(count_occurrences(sw_buffer_data(h), "<!doctype html>") == 1);
 
     sw_buffer_reset(h);
-    assert(sw_tag(h, "html", sw_no_attrs));
+    assert(sw_tag(h, "html", sw_attrs()));
     assert(sw_end(h, "html"));
     assert(count_occurrences(sw_buffer_data(h), "<!doctype html>") == 1);
 
@@ -469,7 +469,7 @@ static void test_html_short_macros(void) {
         sw_text(h, "Search");
         sw_text_no_translate(h, "Search");
     });
-    sw_div(h, sw_no_attrs, {
+    sw_div(h, sw_attrs(), {
         sw_a(h, sw_attrs(sw_attr_no_translate("href", "/docs")), {
             sw_text(h, "Docs");
         });

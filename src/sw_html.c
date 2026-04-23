@@ -627,13 +627,13 @@ b8 sw_rawf(sw_buffer* h, const c8* fmt, ...) {
 }
 
 b8 sw_title(sw_buffer* h, const c8* text) {
-    if (!sw_tag(h, "title", sw_no_attrs)) return 0;
+    if (!sw_tag(h, "title", sw_attrs())) return 0;
     if (!sw_text(h, text)) return 0;
     return sw_end(h, "title");
 }
 
 b8 sw_title_no_translate(sw_buffer* h, const c8* text) {
-    if (!sw_tag(h, "title", sw_no_attrs)) return 0;
+    if (!sw_tag(h, "title", sw_attrs())) return 0;
     if (!sw_text_no_translate(h, text)) return 0;
     return sw_end(h, "title");
 }

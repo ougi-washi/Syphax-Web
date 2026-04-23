@@ -108,7 +108,7 @@ static void render_stylesheet(sw_connection* connection, const c8* request_path)
 }
 
 static void render_feature(sw_buffer* h, const sw_example_feature* feature) {
-    sw_li(h, sw_no_attrs, {
+    sw_li(h, sw_attrs(), {
         sw_strong(h, sw_attrs(sw_attr("data-component", "feature-title")), {
             sw_text(h, feature->title);
         });
@@ -132,7 +132,7 @@ static b8 feature_matches_query(const sw_example_feature* feature, const c8* que
 
 static void render_feature_catalog(sw_buffer* h) {
     sw_section(h, sw_attrs(sw_attr("class", "sw-catalog")), {
-        sw_h2(h, sw_no_attrs, {
+        sw_h2(h, sw_attrs(), {
             sw_text(h, "Library Features");
         });
         render_feature_list(h, NULL, sw_buffer_get_translator(h));
@@ -180,7 +180,7 @@ static void render_preview_fragment(sw_buffer* h, const sw_language* current_lan
         sw_attr("class", "sw-preview-shell"),
         sw_attr("data-component", "search-preview")
     ), {
-        sw_h2(h, sw_no_attrs, {
+        sw_h2(h, sw_attrs(), {
             sw_text(h, "Live Preview");
         });
 
@@ -321,7 +321,7 @@ static void render_preview_status(sw_buffer* h, const c8* query, sz match_count)
         sw_span(h, sw_attrs(sw_attr("class", "sw-chip")), {
             sw_rawf(h, "%zu", match_count);
         });
-        sw_span(h, sw_no_attrs, {
+        sw_span(h, sw_attrs(), {
             sw_text(h, "Matching features for the current query.");
         });
     });
@@ -359,7 +359,7 @@ static void render_root(
     sw_html(h, sw_attrs(
         sw_attr("data-app", "syphax-web")
     ), {
-        sw_head(h, sw_no_attrs, {
+        sw_head(h, sw_attrs(), {
             sw_meta_charset(h, "utf-8");
             sw_title(h, "Syphax Web");
             sw_link(h, sw_attrs(
@@ -373,14 +373,14 @@ static void render_root(
                 sw_attr("class", "sw-shell"),
                 sw_attr("data-component", "page-shell")
             ), {
-                sw_h1(h, sw_no_attrs, {
+                sw_h1(h, sw_attrs(), {
                     sw_text(h, "Syphax Web");
                 });
 
                 render_search_demo(h, translator, current_language, query);
                 (void)sw_js_live_search(h, "sw-search-form", "sw-search-query", "sw-search-preview", "/search-preview");
                 render_feature_catalog(h);
-                sw_p(h, sw_no_attrs, {
+                sw_p(h, sw_attrs(), {
                     sw_text(h, "Static assets are served through a docroot-scoped helper so the example never joins public paths manually.");
                 });
             });

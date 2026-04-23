@@ -32,8 +32,8 @@ typedef struct {
 #define sw_translation(_enabled) "__sw_translation__", ((_enabled) ? "1" : "0")
 #define sw_direction_value(_direction) (((_direction) == SW_LANGUAGE_DIRECTION_RTL) ? "rtl" : (((_direction) == SW_LANGUAGE_DIRECTION_TTB) ? "ttb" : "ltr"))
 #define sw_direction(_direction) "__sw_direction__", sw_direction_value(_direction)
-#define sw_attrs(...) ((sw_attr_list){ .items = (const sw_attr_item[]){ __VA_ARGS__ }, .count = sizeof((const sw_attr_item[]){ __VA_ARGS__ }) / sizeof(sw_attr_item) })
-#define sw_no_attrs ((sw_attr_list){ NULL, 0 })
+#define sw_attrs(...) sw_attrs_impl(((const sw_attr_item[]){ {0}, __VA_ARGS__ }), sizeof((const sw_attr_item[]){ {0}, __VA_ARGS__ }) / sizeof(sw_attr_item))
+#define sw_attrs_impl(_items, _count) ((sw_attr_list){ .items = (_items) + 1, .count = (_count) - 1 })
 
 SW_API sw_buffer* sw_buffer_new(void);
 SW_API void sw_buffer_free(sw_buffer* buffer);
