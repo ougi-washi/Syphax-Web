@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 
-static const c8* const sw_j_runtime_chunks[] = {
+static const c8* const sw_js_runtime_chunks[] = {
     "(function(){",
     "if(window.__swjsRuntime){return;}",
     "function ready(fn){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fn,{once:true});}else{fn();}}",
@@ -55,7 +55,7 @@ static const c8* const sw_j_runtime_chunks[] = {
     "})();"
 };
 
-static b8 sw_j_append_string(sw_char_array* out, const c8* value) {
+static b8 sw_js_append_string(sw_char_array* out, const c8* value) {
     sz i;
     char hex_escape[5];
 
@@ -108,38 +108,38 @@ static b8 sw_j_append_string(sw_char_array* out, const c8* value) {
     return sw_char_array_append_byte(out, '"');
 }
 
-static b8 sw_j_append_key(sw_char_array* out, const c8* key, b8* first) {
+static b8 sw_js_append_key(sw_char_array* out, const c8* key, b8* first) {
     if (!*first && !sw_char_array_append_byte(out, ',')) {
         return 0;
     }
     *first = 0;
-    if (!sw_j_append_string(out, key)) {
+    if (!sw_js_append_string(out, key)) {
         return 0;
     }
     return sw_char_array_append_byte(out, ':');
 }
 
-static b8 sw_j_append_string_field(sw_char_array* out, const c8* key, const c8* value, b8* first) {
-    if (!sw_j_append_key(out, key, first)) {
+static b8 sw_js_append_string_field(sw_char_array* out, const c8* key, const c8* value, b8* first) {
+    if (!sw_js_append_key(out, key, first)) {
         return 0;
     }
     if (value == NULL) {
         return sw_char_array_append_cstr(out, "null");
     }
-    return sw_j_append_string(out, value);
+    return sw_js_append_string(out, value);
 }
 
-static b8 sw_j_append_bool_field(sw_char_array* out, const c8* key, b8 value, b8* first) {
-    if (!sw_j_append_key(out, key, first)) {
+static b8 sw_js_append_bool_field(sw_char_array* out, const c8* key, b8 value, b8* first) {
+    if (!sw_js_append_key(out, key, first)) {
         return 0;
     }
     return sw_char_array_append_cstr(out, value ? "true" : "false");
 }
 
-static b8 sw_j_append_number_field(sw_char_array* out, const c8* key, i32 value, b8* first) {
+static b8 sw_js_append_number_field(sw_char_array* out, const c8* key, i32 value, b8* first) {
     char number[32];
 
-    if (!sw_j_append_key(out, key, first)) {
+    if (!sw_js_append_key(out, key, first)) {
         return 0;
     }
 
@@ -147,8 +147,8 @@ static b8 sw_j_append_number_field(sw_char_array* out, const c8* key, i32 value,
     return sw_char_array_append_cstr(out, number);
 }
 
-static b8 sw_j_emit_initializer(sw_hbuf* h, const c8* helper_name, const c8* method_name, const sw_char_array* config) {
-    if (!sw_j_runtime(h)) {
+static b8 sw_js_emit_initializer(sw_buffer* h, const c8* helper_name, const c8* method_name, const sw_char_array* config) {
+    if (!sw_js_runtime(h)) {
         return 0;
     }
     if (!sw_tag(h, "script", sw_attrs(sw_attr("data-swjs", helper_name)))) return 0;
@@ -158,75 +158,75 @@ static b8 sw_j_emit_initializer(sw_hbuf* h, const c8* helper_name, const c8* met
     return sw_end(h, "script");
 }
 
-static b8 sw_j_emit_live_config(sw_char_array* out, const sw_j_live_opts* opt) {
+static b8 sw_js_emit_live_config(sw_char_array* out, const sw_js_live_opts* opt) {
     b8 first = 1;
 
     if (!sw_char_array_append_byte(out, '{')) return 0;
-    if (!sw_j_append_string_field(out, "formId", opt->form_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "inputId", opt->input_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "endpoint", opt->endpoint, &first)) return 0;
-    if (!sw_j_append_string_field(out, "valueParam", opt->value_param != NULL ? opt->value_param : "value", &first)) return 0;
-    if (!sw_j_append_string_field(out, "loadingClass", opt->loading_class, &first)) return 0;
-    if (!sw_j_append_number_field(out, "debounceMs", opt->debounce_ms, &first)) return 0;
-    if (!sw_j_append_number_field(out, "method", (i32)opt->method, &first)) return 0;
-    if (!sw_j_append_number_field(out, "swapMode", (i32)opt->swap_mode, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "serializeForm", opt->serialize_form, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "abortStale", opt->abort_stale, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "preventSubmit", opt->prevent_submit, &first)) return 0;
+    if (!sw_js_append_string_field(out, "formId", opt->form_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "inputId", opt->input_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "endpoint", opt->endpoint, &first)) return 0;
+    if (!sw_js_append_string_field(out, "valueParam", opt->value_param != NULL ? opt->value_param : "value", &first)) return 0;
+    if (!sw_js_append_string_field(out, "loadingClass", opt->loading_class, &first)) return 0;
+    if (!sw_js_append_number_field(out, "debounceMs", opt->debounce_ms, &first)) return 0;
+    if (!sw_js_append_number_field(out, "method", (i32)opt->method, &first)) return 0;
+    if (!sw_js_append_number_field(out, "swapMode", (i32)opt->swap_mode, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "serializeForm", opt->serialize_form, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "abortStale", opt->abort_stale, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "preventSubmit", opt->prevent_submit, &first)) return 0;
     return sw_char_array_append_byte(out, '}');
 }
 
-static b8 sw_j_emit_fetch_config(sw_char_array* out, const sw_j_fetch_opts* opt) {
+static b8 sw_js_emit_fetch_config(sw_char_array* out, const sw_js_fetch_opts* opt) {
     b8 first = 1;
 
     if (!sw_char_array_append_byte(out, '{')) return 0;
-    if (!sw_j_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "formId", opt->form_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "inputId", NULL, &first)) return 0;
-    if (!sw_j_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "endpoint", opt->endpoint, &first)) return 0;
-    if (!sw_j_append_string_field(out, "valueParam", NULL, &first)) return 0;
-    if (!sw_j_append_string_field(out, "loadingClass", opt->loading_class, &first)) return 0;
-    if (!sw_j_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
-    if (!sw_j_append_number_field(out, "method", (i32)opt->method, &first)) return 0;
-    if (!sw_j_append_number_field(out, "swapMode", (i32)opt->swap_mode, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "serializeForm", opt->serialize_form, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "abortStale", opt->abort_stale, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
+    if (!sw_js_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "formId", opt->form_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "inputId", NULL, &first)) return 0;
+    if (!sw_js_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "endpoint", opt->endpoint, &first)) return 0;
+    if (!sw_js_append_string_field(out, "valueParam", NULL, &first)) return 0;
+    if (!sw_js_append_string_field(out, "loadingClass", opt->loading_class, &first)) return 0;
+    if (!sw_js_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
+    if (!sw_js_append_number_field(out, "method", (i32)opt->method, &first)) return 0;
+    if (!sw_js_append_number_field(out, "swapMode", (i32)opt->swap_mode, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "serializeForm", opt->serialize_form, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "abortStale", opt->abort_stale, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
     return sw_char_array_append_byte(out, '}');
 }
 
-static b8 sw_j_emit_toggle_config(sw_char_array* out, const sw_j_toggle_opts* opt) {
+static b8 sw_js_emit_toggle_config(sw_char_array* out, const sw_js_toggle_opts* opt) {
     b8 first = 1;
 
     if (!sw_char_array_append_byte(out, '{')) return 0;
-    if (!sw_j_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
-    if (!sw_j_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "syncInitialState", opt->sync_initial_state, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "useTriggerChecked", opt->use_trigger_checked, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "invert", opt->invert, &first)) return 0;
+    if (!sw_js_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
+    if (!sw_js_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "syncInitialState", opt->sync_initial_state, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "useTriggerChecked", opt->use_trigger_checked, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "invert", opt->invert, &first)) return 0;
     return sw_char_array_append_byte(out, '}');
 }
 
-static b8 sw_j_emit_class_config(sw_char_array* out, const sw_j_class_opts* opt) {
+static b8 sw_js_emit_class_config(sw_char_array* out, const sw_js_class_opts* opt) {
     b8 first = 1;
 
     if (!sw_char_array_append_byte(out, '{')) return 0;
-    if (!sw_j_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
-    if (!sw_j_append_string_field(out, "className", opt->class_name, &first)) return 0;
-    if (!sw_j_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "syncInitialState", opt->sync_initial_state, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "useTriggerChecked", opt->use_trigger_checked, &first)) return 0;
-    if (!sw_j_append_bool_field(out, "invert", opt->invert, &first)) return 0;
+    if (!sw_js_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "className", opt->class_name, &first)) return 0;
+    if (!sw_js_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "syncInitialState", opt->sync_initial_state, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "useTriggerChecked", opt->use_trigger_checked, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "invert", opt->invert, &first)) return 0;
     return sw_char_array_append_byte(out, '}');
 }
 
-b8 sw_j_runtime(sw_hbuf* h) {
+b8 sw_js_runtime(sw_buffer* h) {
     sz i;
 
     if (h == NULL) {
@@ -239,8 +239,8 @@ b8 sw_j_runtime(sw_hbuf* h) {
     if (!sw_tag(h, "script", sw_attrs(sw_attr("data-swjs", "runtime")))) {
         return 0;
     }
-    for (i = 0; i < sizeof(sw_j_runtime_chunks) / sizeof(sw_j_runtime_chunks[0]); ++i) {
-        if (!sw_raw(h, sw_j_runtime_chunks[i])) {
+    for (i = 0; i < sizeof(sw_js_runtime_chunks) / sizeof(sw_js_runtime_chunks[0]); ++i) {
+        if (!sw_raw(h, sw_js_runtime_chunks[i])) {
             return 0;
         }
     }
@@ -251,25 +251,25 @@ b8 sw_j_runtime(sw_hbuf* h) {
     return 1;
 }
 
-b8 sw_j_live_search(sw_hbuf* h, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint) {
-    const sw_j_live_opts options = {
+b8 sw_js_live_search(sw_buffer* h, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint) {
+    const sw_js_live_opts options = {
         .form_id = form_id,
         .input_id = input_id,
         .target_id = target_id,
         .endpoint = endpoint,
         .loading_class = "is-loading",
         .debounce_ms = 120,
-        .method = SW_J_GET,
-        .swap_mode = SW_J_INNER,
+        .method = SW_JS_GET,
+        .swap_mode = SW_JS_INNER,
         .serialize_form = 1,
         .abort_stale = 1,
         .prevent_submit = 1
     };
 
-    return sw_j_live_cfg(h, &options);
+    return sw_js_live_cfg(h, &options);
 }
 
-b8 sw_j_live_cfg(sw_hbuf* h, const sw_j_live_opts* opt) {
+b8 sw_js_live_cfg(sw_buffer* h, const sw_js_live_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -278,13 +278,13 @@ b8 sw_j_live_cfg(sw_hbuf* h, const sw_j_live_opts* opt) {
     }
 
     sw_char_array_init(&config);
-    ok = sw_j_emit_live_config(&config, opt)
-        && sw_j_emit_initializer(h, "live-search", "liveSearch", &config);
+    ok = sw_js_emit_live_config(&config, opt)
+        && sw_js_emit_initializer(h, "live-search", "liveSearch", &config);
     sw_char_array_free(&config);
     return ok;
 }
 
-b8 sw_j_fetch_cfg(sw_hbuf* h, const sw_j_fetch_opts* opt) {
+b8 sw_js_fetch_cfg(sw_buffer* h, const sw_js_fetch_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -293,13 +293,13 @@ b8 sw_j_fetch_cfg(sw_hbuf* h, const sw_j_fetch_opts* opt) {
     }
 
     sw_char_array_init(&config);
-    ok = sw_j_emit_fetch_config(&config, opt)
-        && sw_j_emit_initializer(h, "fetch-replace", "fetchReplace", &config);
+    ok = sw_js_emit_fetch_config(&config, opt)
+        && sw_js_emit_initializer(h, "fetch-replace", "fetchReplace", &config);
     sw_char_array_free(&config);
     return ok;
 }
 
-b8 sw_j_toggle_cfg(sw_hbuf* h, const sw_j_toggle_opts* opt) {
+b8 sw_js_toggle_cfg(sw_buffer* h, const sw_js_toggle_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -308,13 +308,13 @@ b8 sw_j_toggle_cfg(sw_hbuf* h, const sw_j_toggle_opts* opt) {
     }
 
     sw_char_array_init(&config);
-    ok = sw_j_emit_toggle_config(&config, opt)
-        && sw_j_emit_initializer(h, "toggle", "toggle", &config);
+    ok = sw_js_emit_toggle_config(&config, opt)
+        && sw_js_emit_initializer(h, "toggle", "toggle", &config);
     sw_char_array_free(&config);
     return ok;
 }
 
-b8 sw_j_class_cfg(sw_hbuf* h, const sw_j_class_opts* opt) {
+b8 sw_js_class_cfg(sw_buffer* h, const sw_js_class_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -323,8 +323,8 @@ b8 sw_j_class_cfg(sw_hbuf* h, const sw_j_class_opts* opt) {
     }
 
     sw_char_array_init(&config);
-    ok = sw_j_emit_class_config(&config, opt)
-        && sw_j_emit_initializer(h, "class-toggle", "classToggle", &config);
+    ok = sw_js_emit_class_config(&config, opt)
+        && sw_js_emit_initializer(h, "class-toggle", "classToggle", &config);
     sw_char_array_free(&config);
     return ok;
 }

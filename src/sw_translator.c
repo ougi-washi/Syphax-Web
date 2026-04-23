@@ -6,7 +6,40 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void sw_language_dispose(sw_language* language);
 static void sw_translation_language_dispose(sw_translation_language* language);
+
+static void sw_language_dispose(sw_language* language) {
+    if (language == NULL) {
+        return;
+    }
+
+    free((void*)language->code);
+    free((void*)language->label);
+    memset(language, 0, sizeof(*language));
+}
+
+static b8 sw_registered_language_begin(sw_language* language, const sw_language* source) {
+    const c8* label;
+
+    if (language == NULL || source == NULL || source->code == NULL || source->code[0] == '\0') {
+        return 0;
+    }
+
+    label = (source->label != NULL) ? source->label : source->code;
+
+    memset(language, 0, sizeof(*language));
+
+    language->code = sw_strdup_cstr(source->code);
+    language->label = sw_strdup_cstr(label);
+    language->direction = source->direction;
+    if (language->code == NULL || language->label == NULL) {
+        sw_language_dispose(language);
+        return 0;
+    }
+
+    return 1;
+}
 
 static void sw_translation_items_free(sw_translation_item_array* items) {
     sz i;
@@ -48,27 +81,27 @@ static void sw_translation_language_dispose(sw_translation_language* language) {
 
     free(language->code);
     sw_translation_items_free(&language->items);
-    language->code = NULL;
+    memset(language, 0, sizeof(*language));
 }
 
-static sw_translation_language* sw_translator_find_language(
+static sw_language* sw_translator_find_registered_language(
     sw_translator* translator,
-    const c8* lang,
+    const c8* code,
     s_handle* out_handle
 ) {
     sz i;
-    sw_translation_language* data;
+    sw_language* data;
 
     if (out_handle != NULL) {
         *out_handle = S_HANDLE_NULL;
     }
-    if (translator == NULL || lang == NULL) {
+    if (translator == NULL || code == NULL) {
         return NULL;
     }
 
     data = s_array_get_data(&translator->languages);
     for (i = 0; i < s_array_get_size(&translator->languages); ++i) {
-        if (data[i].code != NULL && strcmp(data[i].code, lang) == 0) {
+        if (data[i].code != NULL && strcmp(data[i].code, code) == 0) {
             if (out_handle != NULL) {
                 *out_handle = s_array_handle(&translator->languages, (u32)i);
             }
@@ -79,15 +112,53 @@ static sw_translation_language* sw_translator_find_language(
     return NULL;
 }
 
-static const sw_translation_language* sw_translator_current_language(const sw_translator* translator) {
-    sw_translation_language_array* languages;
+static sw_translation_language* sw_translator_find_translation_language(
+    sw_translator* translator,
+    const c8* code,
+    s_handle* out_handle
+) {
+    sz i;
+    sw_translation_language* data;
+
+    if (out_handle != NULL) {
+        *out_handle = S_HANDLE_NULL;
+    }
+    if (translator == NULL || code == NULL) {
+        return NULL;
+    }
+
+    data = s_array_get_data(&translator->translations);
+    for (i = 0; i < s_array_get_size(&translator->translations); ++i) {
+        if (data[i].code != NULL && strcmp(data[i].code, code) == 0) {
+            if (out_handle != NULL) {
+                *out_handle = s_array_handle(&translator->translations, (u32)i);
+            }
+            return &data[i];
+        }
+    }
+
+    return NULL;
+}
+
+static const sw_language* sw_translator_current_language(const sw_translator* translator) {
+    sw_languages* languages;
 
     if (translator == NULL || translator->current_language == S_HANDLE_NULL) {
         return NULL;
     }
 
-    languages = (sw_translation_language_array*)&translator->languages;
+    languages = (sw_languages*)&translator->languages;
     return s_array_get(languages, translator->current_language);
+}
+
+static const sw_translation_language* sw_translator_current_translation_language(const sw_translator* translator) {
+    const sw_language* language = sw_translator_current_language(translator);
+
+    if (language == NULL || language->code == NULL) {
+        return NULL;
+    }
+
+    return sw_translator_find_translation_language((sw_translator*)translator, language->code, NULL);
 }
 
 static b8 sw_translation_items_has_key(const sw_translation_item_array* items, const c8* key) {
@@ -166,38 +237,39 @@ static b8 sw_json_object_name_seen_before(const s_json* object, sz index, const 
     return 0;
 }
 
-static b8 sw_translator_language_begin(sw_translation_language* language, const c8* lang) {
-    if (language == NULL || lang == NULL) {
+static b8 sw_translation_language_begin(sw_translation_language* language, const c8* code) {
+    if (language == NULL || code == NULL || code[0] == '\0') {
         return 0;
     }
 
     memset(language, 0, sizeof(*language));
     s_array_init(&language->items);
 
-    language->code = sw_strdup_cstr(lang);
+    language->code = sw_strdup_cstr(code);
     if (language->code == NULL) {
+        sw_translation_items_free(&language->items);
         return 0;
     }
 
     return 1;
 }
 
-static b8 sw_translator_build_empty_language(sw_translation_language* language, const c8* lang) {
-    if (language == NULL || lang == NULL) {
+static b8 sw_translator_build_empty_language(sw_translation_language* language, const c8* code) {
+    if (language == NULL || code == NULL) {
         return 0;
     }
 
-    return sw_translator_language_begin(language, lang);
+    return sw_translation_language_begin(language, code);
 }
 
-static b8 sw_translator_build_flat_language(sw_translation_language* language, const c8* lang, const s_json* root) {
+static b8 sw_translator_build_flat_language(sw_translation_language* language, const c8* code, const s_json* root) {
     sz i;
 
-    if (language == NULL || lang == NULL || root == NULL || root->type != S_JSON_OBJECT) {
+    if (language == NULL || code == NULL || root == NULL || root->type != S_JSON_OBJECT) {
         return 0;
     }
 
-    if (!sw_translator_language_begin(language, lang)) {
+    if (!sw_translation_language_begin(language, code)) {
         return 0;
     }
 
@@ -222,14 +294,14 @@ static b8 sw_translator_build_flat_language(sw_translation_language* language, c
     return 1;
 }
 
-static b8 sw_translator_build_catalog_language(sw_translation_language* language, const c8* lang, const s_json* root) {
+static b8 sw_translator_build_catalog_language(sw_translation_language* language, const c8* code, const s_json* root) {
     sz i;
 
-    if (language == NULL || lang == NULL || root == NULL || root->type != S_JSON_OBJECT) {
+    if (language == NULL || code == NULL || root == NULL || root->type != S_JSON_OBJECT) {
         return 0;
     }
 
-    if (!sw_translator_language_begin(language, lang)) {
+    if (!sw_translation_language_begin(language, code)) {
         return 0;
     }
 
@@ -258,7 +330,7 @@ static b8 sw_translator_build_catalog_language(sw_translation_language* language
                 return 0;
             }
 
-            if (strcmp(locale->name, lang) == 0) {
+            if (strcmp(locale->name, code) == 0) {
                 value = locale->as.string;
             }
         }
@@ -274,7 +346,7 @@ static b8 sw_translator_build_catalog_language(sw_translation_language* language
 
 static b8 sw_translator_build_language_from_text(
     sw_translation_language* language,
-    const c8* lang,
+    const c8* code,
     const c8* json_text,
     b8 use_catalog
 ) {
@@ -282,7 +354,7 @@ static b8 sw_translator_build_language_from_text(
     s_json* root;
     b8 ok;
 
-    if (language == NULL || lang == NULL || json_text == NULL) {
+    if (language == NULL || code == NULL || json_text == NULL) {
         return 0;
     }
 
@@ -292,11 +364,65 @@ static b8 sw_translator_build_language_from_text(
     }
 
     ok = use_catalog
-        ? sw_translator_build_catalog_language(language, lang, root)
-        : sw_translator_build_flat_language(language, lang, root);
+        ? sw_translator_build_catalog_language(language, code, root)
+        : sw_translator_build_flat_language(language, code, root);
 
     s_json_free(root);
     return ok;
+}
+
+static b8 sw_translator_upsert_registered_language(
+    sw_translator* translator,
+    const sw_language* language,
+    s_handle* out_handle
+) {
+    sw_language owned;
+    sw_language* existing;
+    s_handle handle = S_HANDLE_NULL;
+
+    if (out_handle != NULL) {
+        *out_handle = S_HANDLE_NULL;
+    }
+    if (translator == NULL || language == NULL || language->code == NULL || language->code[0] == '\0') {
+        return 0;
+    }
+
+    if (!sw_registered_language_begin(&owned, language)) {
+        return 0;
+    }
+
+    existing = sw_translator_find_registered_language(translator, language->code, &handle);
+    if (existing != NULL) {
+        sw_language_dispose(existing);
+        *existing = owned;
+        if (out_handle != NULL) {
+            *out_handle = handle;
+        }
+        return 1;
+    }
+
+    handle = s_array_add(&translator->languages, owned);
+    if (translator->current_language == S_HANDLE_NULL) {
+        translator->current_language = handle;
+    }
+    if (out_handle != NULL) {
+        *out_handle = handle;
+    }
+    return 1;
+}
+
+static b8 sw_translator_ensure_registered_language(sw_translator* translator, const c8* code) {
+    sw_language fallback = {0};
+
+    if (translator == NULL || code == NULL || code[0] == '\0') {
+        return 0;
+    }
+    if (sw_translator_find_registered_language(translator, code, NULL) != NULL) {
+        return 1;
+    }
+
+    fallback.code = code;
+    return sw_translator_upsert_registered_language(translator, &fallback, NULL);
 }
 
 static b8 sw_translator_store_language(sw_translator* translator, sw_translation_language* loaded) {
@@ -306,42 +432,42 @@ static b8 sw_translator_store_language(sw_translator* translator, sw_translation
     if (translator == NULL || loaded == NULL || loaded->code == NULL) {
         return 0;
     }
+    if (!sw_translator_ensure_registered_language(translator, loaded->code)) {
+        return 0;
+    }
 
-    existing = sw_translator_find_language(translator, loaded->code, &existing_handle);
+    existing = sw_translator_find_translation_language(translator, loaded->code, &existing_handle);
     if (existing != NULL) {
         sw_translation_language_dispose(existing);
         *existing = *loaded;
-        if (translator->current_language == existing_handle) {
-            translator->current_language = existing_handle;
-        }
         memset(loaded, 0, sizeof(*loaded));
         return 1;
     }
 
-    s_array_add(&translator->languages, *loaded);
+    s_array_add(&translator->translations, *loaded);
     memset(loaded, 0, sizeof(*loaded));
     return 1;
 }
 
-static b8 sw_translator_load_text(sw_translator* translator, const c8* lang, const c8* json_text, b8 use_catalog) {
+static b8 sw_translator_load_text(sw_translator* translator, const c8* code, const c8* json_text, b8 use_catalog) {
     sw_translation_language loaded;
 
-    if (translator == NULL || lang == NULL || json_text == NULL) {
+    if (translator == NULL || code == NULL || json_text == NULL) {
         return 0;
     }
 
-    if (!sw_translator_build_language_from_text(&loaded, lang, json_text, use_catalog)) {
+    if (!sw_translator_build_language_from_text(&loaded, code, json_text, use_catalog)) {
         return 0;
     }
 
     return sw_translator_store_language(translator, &loaded);
 }
 
-static b8 sw_translator_load_file(sw_translator* translator, const c8* lang, const c8* path, b8 use_catalog) {
+static b8 sw_translator_load_file(sw_translator* translator, const c8* code, const c8* path, b8 use_catalog) {
     c8* json_text;
     b8 ok;
 
-    if (translator == NULL || lang == NULL || path == NULL) {
+    if (translator == NULL || code == NULL || path == NULL) {
         return 0;
     }
 
@@ -350,7 +476,7 @@ static b8 sw_translator_load_file(sw_translator* translator, const c8* lang, con
         return 0;
     }
 
-    ok = sw_translator_load_text(translator, lang, json_text, use_catalog);
+    ok = sw_translator_load_text(translator, code, json_text, use_catalog);
     free(json_text);
     return ok;
 }
@@ -466,46 +592,74 @@ static b8 sw_translator_load_catalog_all_file(sw_translator* translator, const c
     return ok;
 }
 
-sw_translator* sw_translator_create(void) {
-    sw_translator* translator = (sw_translator*)calloc(1, sizeof(*translator));
-    if (translator != NULL) {
-        s_array_init(&translator->languages);
-        translator->current_language = S_HANDLE_NULL;
+sw_translator* sw_translator_create_internal(const sw_language* default_language) {
+    sw_translator* translator;
+    s_handle handle = S_HANDLE_NULL;
+
+    if (default_language == NULL || default_language->code == NULL || default_language->code[0] == '\0') {
+        return NULL;
     }
+
+    translator = (sw_translator*)calloc(1, sizeof(*translator));
+    if (translator == NULL) {
+        return NULL;
+    }
+
+    s_array_init(&translator->languages);
+    s_array_init(&translator->translations);
+    translator->current_language = S_HANDLE_NULL;
+
+    if (!sw_translator_upsert_registered_language(translator, default_language, &handle)) {
+        sw_translator_destroy(translator);
+        return NULL;
+    }
+
+    translator->current_language = handle;
     return translator;
+}
+
+void sw_add_language_internal(sw_translator* translator, const sw_language* language) {
+    (void)sw_translator_upsert_registered_language(translator, language, NULL);
 }
 
 void sw_translator_destroy(sw_translator* translator) {
     sz i;
-    sw_translation_language* data;
+    sw_language* languages;
+    sw_translation_language* translations;
 
     if (translator == NULL) {
         return;
     }
 
-    data = s_array_get_data(&translator->languages);
+    languages = s_array_get_data(&translator->languages);
     for (i = 0; i < s_array_get_size(&translator->languages); ++i) {
-        sw_translation_language_dispose(&data[i]);
+        sw_language_dispose(&languages[i]);
     }
-
     s_array_clear(&translator->languages);
+
+    translations = s_array_get_data(&translator->translations);
+    for (i = 0; i < s_array_get_size(&translator->translations); ++i) {
+        sw_translation_language_dispose(&translations[i]);
+    }
+    s_array_clear(&translator->translations);
+
     free(translator);
 }
 
-b8 sw_translator_load_json_text(sw_translator* translator, const c8* lang, const c8* json_text) {
-    return sw_translator_load_text(translator, lang, json_text, 0);
+b8 sw_translator_load_json_text(sw_translator* translator, const c8* code, const c8* json_text) {
+    return sw_translator_load_text(translator, code, json_text, 0);
 }
 
-b8 sw_translator_load_json_file(sw_translator* translator, const c8* lang, const c8* path) {
-    return sw_translator_load_file(translator, lang, path, 0);
+b8 sw_translator_load_json_file(sw_translator* translator, const c8* code, const c8* path) {
+    return sw_translator_load_file(translator, code, path, 0);
 }
 
-b8 sw_translator_load_catalog_json_text(sw_translator* translator, const c8* lang, const c8* json_text) {
-    return sw_translator_load_text(translator, lang, json_text, 1);
+b8 sw_translator_load_catalog_json_text(sw_translator* translator, const c8* code, const c8* json_text) {
+    return sw_translator_load_text(translator, code, json_text, 1);
 }
 
-b8 sw_translator_load_catalog_json_file(sw_translator* translator, const c8* lang, const c8* path) {
-    return sw_translator_load_file(translator, lang, path, 1);
+b8 sw_translator_load_catalog_json_file(sw_translator* translator, const c8* code, const c8* path) {
+    return sw_translator_load_file(translator, code, path, 1);
 }
 
 b8 sw_translator_load_catalog_all_json_text(sw_translator* translator, const c8* json_text) {
@@ -516,10 +670,10 @@ b8 sw_translator_load_catalog_all_json_file(sw_translator* translator, const c8*
     return sw_translator_load_catalog_all_file(translator, path);
 }
 
-b8 sw_translator_set_language(sw_translator* translator, const c8* lang) {
+b8 sw_translator_set_language(sw_translator* translator, const c8* code) {
     s_handle handle = S_HANDLE_NULL;
 
-    if (sw_translator_find_language(translator, lang, &handle) == NULL) {
+    if (sw_translator_find_registered_language(translator, code, &handle) == NULL) {
         return 0;
     }
 
@@ -528,7 +682,7 @@ b8 sw_translator_set_language(sw_translator* translator, const c8* lang) {
 }
 
 const c8* sw_translator_get_language(const sw_translator* translator) {
-    const sw_translation_language* language = sw_translator_current_language(translator);
+    const sw_language* language = sw_translator_current_language(translator);
 
     if (language == NULL || language->code == NULL) {
         return "";
@@ -545,7 +699,7 @@ const c8* sw_translate(const sw_translator* translator, const c8* str) {
         return NULL;
     }
 
-    language = sw_translator_current_language(translator);
+    language = sw_translator_current_translation_language(translator);
     if (language == NULL) {
         return str;
     }

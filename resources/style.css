@@ -15,6 +15,7 @@
   --max-width:760px;
   --font-sans:"Noto Sans","Noto Sans Arabic","Noto Sans JP",system-ui,-apple-system,"Segoe UI",sans-serif;
   --font-sans-ar:"Noto Naskh Arabic","Noto Sans Arabic","Amiri","Geeza Pro",Tahoma,sans-serif;
+  --font-sans-zh:"Noto Sans SC","PingFang SC","Microsoft YaHei","Heiti SC",system-ui,sans-serif;
   --font-sans-ja:"Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 }
@@ -230,6 +231,21 @@ input[type="text"]:focus{
   border-radius:var(--radius);
 }
 
+.sw-preview-results[data-sw-direction="ttb"]{
+  display:flex;
+  align-items:flex-start;
+}
+
+.sw-preview-results[data-sw-direction="ttb"] .sw-list{
+  padding-left:0;
+  padding-right:18px;
+}
+
+.sw-preview-results[data-sw-direction="ttb"] .sw-list li + li{
+  margin-top:0;
+  margin-left:10px;
+}
+
 .sw-result-meta{
   display:flex;
   flex-wrap:wrap;
@@ -262,18 +278,42 @@ html[lang="ar"] body{
   font-family:var(--font-sans-ar);
 }
 
+html[lang="fa"] body{
+  font-family:var(--font-sans-ar);
+}
+
+html[lang="zh"] body{
+  font-family:var(--font-sans-zh);
+}
+
 html[lang="ja"] body{
   font-family:var(--font-sans-ja);
 }
 
 html[lang="ar"] h1,
+html[lang="fa"] h1,
+html[lang="zh"] h1,
 html[lang="ar"] h2,
+html[lang="fa"] h2,
+html[lang="zh"] h2,
 html[lang="ar"] .sw-field-label,
+html[lang="fa"] .sw-field-label,
+html[lang="zh"] .sw-field-label,
 html[lang="ar"] .sw-list strong,
+html[lang="fa"] .sw-list strong,
+html[lang="zh"] .sw-list strong,
 html[lang="ar"] .sw-language-button,
+html[lang="fa"] .sw-language-button,
+html[lang="zh"] .sw-language-button,
 html[lang="ar"] .sw-search-button,
+html[lang="fa"] .sw-search-button,
+html[lang="zh"] .sw-search-button,
 html[lang="ar"] input[type="text"],
+html[lang="fa"] input[type="text"],
+html[lang="zh"] input[type="text"],
 html[lang="ar"] .sw-chip,
+html[lang="fa"] .sw-chip,
+html[lang="zh"] .sw-chip,
 html[lang="ja"] h1,
 html[lang="ja"] h2,
 html[lang="ja"] .sw-field-label,
@@ -293,8 +333,27 @@ html[lang="ar"] .sw-list strong,
 html[lang="ar"] .sw-language-button,
 html[lang="ar"] .sw-search-button,
 html[lang="ar"] input[type="text"],
-html[lang="ar"] .sw-chip{
+html[lang="ar"] .sw-chip,
+html[lang="fa"] h1,
+html[lang="fa"] h2,
+html[lang="fa"] .sw-field-label,
+html[lang="fa"] .sw-list strong,
+html[lang="fa"] .sw-language-button,
+html[lang="fa"] .sw-search-button,
+html[lang="fa"] input[type="text"],
+html[lang="fa"] .sw-chip{
   font-family:var(--font-sans-ar);
+}
+
+html[lang="zh"] h1,
+html[lang="zh"] h2,
+html[lang="zh"] .sw-field-label,
+html[lang="zh"] .sw-list strong,
+html[lang="zh"] .sw-language-button,
+html[lang="zh"] .sw-search-button,
+html[lang="zh"] input[type="text"],
+html[lang="zh"] .sw-chip{
+  font-family:var(--font-sans-zh);
 }
 
 html[lang="ja"] h1,

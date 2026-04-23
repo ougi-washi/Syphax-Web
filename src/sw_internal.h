@@ -39,12 +39,11 @@ typedef struct sw_listener sw_listener;
 typedef struct sw_connection sw_connection;
 
 typedef s_array(c8, sw_char_array);
-
+typedef s_array(b8, sw_bool_array);
 typedef s_array(sw_http_header, sw_http_header_array);
-
 typedef s_array(sw_listener*, sw_listener_array);
-
 typedef s_array(sw_connection*, sw_connection_array);
+typedef s_array(sw_language, sw_languages);
 
 typedef struct {
     c8* key;
@@ -60,18 +59,20 @@ typedef struct {
 
 typedef s_array(sw_translation_language, sw_translation_language_array);
 
+struct sw_translator {
+    sw_languages languages;
+    sw_translation_language_array translations;
+    s_handle current_language;
+};
+
 typedef enum {
     SW_SOURCE_LISTENER = 1,
     SW_SOURCE_CONNECTION = 2
 } sw_source_kind;
 
-struct sw_translator {
-    sw_translation_language_array languages;
-    s_handle current_language;
-};
-
-struct sw_hbuf {
+struct sw_buffer {
     sw_char_array bytes;
+    sw_bool_array translation_stack;
     const sw_translator* translator;
     b8 translation_enabled;
     b8 html_doctype_emitted;

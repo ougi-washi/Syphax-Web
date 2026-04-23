@@ -62,18 +62,18 @@ static void handler(sw_connection* c, const sw_http_message* hm, void* user_data
         return;
     }
 
-    sw_hbuf* h = sw_hbuf_new();
+    sw_buffer* buffer = sw_buffer_new();
 
-    sw_html(h, sw_attrs(sw_attr("lang", "en")), {
-        sw_body(h, sw_no_attrs, {
-            sw_h1(h, sw_no_attrs, {
-                sw_text(h, "Syphax Web");
+    sw_html(buffer, sw_attrs(sw_attr("lang", "en")), {
+        sw_body(buffer, sw_no_attrs, {
+            sw_h1(buffer, sw_no_attrs, {
+                sw_text(buffer, "Syphax Web");
             });
         });
     });
 
-    sw_http_reply(c, 200, "text/html; charset=utf-8", sw_hbuf_data(h), sw_hbuf_len(h));
-    sw_hbuf_free(h);
+    sw_http_reply(c, 200, "text/html; charset=utf-8", sw_buffer_data(buffer), sw_buffer_len(buffer));
+    sw_buffer_free(buffer);
 }
 
 int main(void) {
@@ -86,7 +86,7 @@ Open `http://127.0.0.1:8000`.
 ## Common Pieces
 
 - HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
-- JS: `sw_j_live_search`, `sw_j_live`, `sw_j_fetch`, `sw_j_toggle`, `sw_j_class`
+- JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
 - HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`
 - Utility: `sw_matches_query`
 
@@ -109,7 +109,7 @@ Load:
 ```c
 #include "sw_translator.h"
 
-sw_translator* tr = sw_translator_create();
+sw_translator* tr = sw_translator_create(.code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
 sw_translator_load_catalog_all_json_file(tr, "resources/translations.json");
 sw_translator_set_language(tr, "fr");
 ```
@@ -131,8 +131,9 @@ Installed catalog:
 Features in the example:
 
 - live search
-- language buttons: `en`, `fr`, `ar`, `ja`
+- language buttons: `en`, `ar`, `fa`, `zh`, `ja`
 - translated HTML
+- vertical preview text for `zh` and `ja` via `sw_attr(sw_direction(SW_LANGUAGE_DIRECTION_TTB))`
 
 ## Limits
 

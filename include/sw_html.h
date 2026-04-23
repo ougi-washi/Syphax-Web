@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-typedef struct sw_hbuf sw_hbuf;
+typedef struct sw_buffer sw_buffer;
 
 typedef struct {
     const c8* name;
@@ -24,93 +24,98 @@ typedef struct {
     sz count;
 } sw_attr_list;
 
-#define sw_attr(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1 })
-#define sw_attr_no_translate(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1, .no_translate = 1 })
+#define sw_attr(...) sw_attr_impl(__VA_ARGS__)
+#define sw_attr_impl(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1 })
+#define sw_attr_no_translate(...) sw_attr_no_translate_impl(__VA_ARGS__)
+#define sw_attr_no_translate_impl(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1, .no_translate = 1 })
 #define sw_attr_bool(_name, _enabled) ((sw_attr_item){ .name = (_name), .enabled = (_enabled), .is_boolean = 1 })
+#define sw_translation(_enabled) "__sw_translation__", ((_enabled) ? "1" : "0")
+#define sw_direction_value(_direction) (((_direction) == SW_LANGUAGE_DIRECTION_RTL) ? "rtl" : (((_direction) == SW_LANGUAGE_DIRECTION_TTB) ? "ttb" : "ltr"))
+#define sw_direction(_direction) "__sw_direction__", sw_direction_value(_direction)
 #define sw_attrs(...) ((sw_attr_list){ .items = (const sw_attr_item[]){ __VA_ARGS__ }, .count = sizeof((const sw_attr_item[]){ __VA_ARGS__ }) / sizeof(sw_attr_item) })
 #define sw_no_attrs ((sw_attr_list){ NULL, 0 })
 
-SW_API sw_hbuf* sw_hbuf_new(void);
-SW_API void sw_hbuf_free(sw_hbuf* h);
-SW_API void sw_hbuf_reset(sw_hbuf* h);
-SW_API void sw_hbuf_set_translator(sw_hbuf* h, const sw_translator* translator);
-SW_API const sw_translator* sw_hbuf_get_translator(const sw_hbuf* h);
-SW_API void sw_hbuf_set_translation(sw_hbuf* h, b8 enabled);
-SW_API b8 sw_hbuf_translation_enabled(const sw_hbuf* h);
-SW_API const c8* sw_hbuf_data(const sw_hbuf* h);
-SW_API sz sw_hbuf_len(const sw_hbuf* h);
+SW_API sw_buffer* sw_buffer_new(void);
+SW_API void sw_buffer_free(sw_buffer* buffer);
+SW_API void sw_buffer_reset(sw_buffer* buffer);
+SW_API void sw_buffer_set_translator(sw_buffer* buffer, const sw_translator* translator);
+SW_API const sw_translator* sw_buffer_get_translator(const sw_buffer* buffer);
+SW_API void sw_buffer_set_translation(sw_buffer* buffer, b8 enabled);
+SW_API b8 sw_buffer_translation_enabled(const sw_buffer* buffer);
+SW_API const c8* sw_buffer_data(const sw_buffer* buffer);
+SW_API sz sw_buffer_len(const sw_buffer* buffer);
 
-SW_API b8 sw_tag(sw_hbuf* h, const c8* tag, sw_attr_list attrs);
-SW_API b8 sw_end(sw_hbuf* h, const c8* tag);
-SW_API b8 sw_void(sw_hbuf* h, const c8* tag, sw_attr_list attrs);
-SW_API b8 sw_text(sw_hbuf* h, const c8* text);
-SW_API b8 sw_text_no_translate(sw_hbuf* h, const c8* text);
-SW_API b8 sw_raw(sw_hbuf* h, const c8* text);
-SW_API b8 sw_rawf(sw_hbuf* h, const c8* fmt, ...);
-SW_API b8 sw_title(sw_hbuf* h, const c8* text);
-SW_API b8 sw_title_no_translate(sw_hbuf* h, const c8* text);
-SW_API b8 sw_meta_charset(sw_hbuf* h, const c8* charset);
+SW_API b8 sw_tag(sw_buffer* buffer, const c8* tag, sw_attr_list attrs);
+SW_API b8 sw_end(sw_buffer* buffer, const c8* tag);
+SW_API b8 sw_void(sw_buffer* buffer, const c8* tag, sw_attr_list attrs);
+SW_API b8 sw_text(sw_buffer* buffer, const c8* text);
+SW_API b8 sw_text_no_translate(sw_buffer* buffer, const c8* text);
+SW_API b8 sw_raw(sw_buffer* buffer, const c8* text);
+SW_API b8 sw_rawf(sw_buffer* buffer, const c8* fmt, ...);
+SW_API b8 sw_title(sw_buffer* buffer, const c8* text);
+SW_API b8 sw_title_no_translate(sw_buffer* buffer, const c8* text);
+SW_API b8 sw_meta_charset(sw_buffer* buffer, const c8* charset);
 
-#define sw_translate_on(_h) sw_hbuf_set_translation((_h), 1)
-#define sw_translate_off(_h) sw_hbuf_set_translation((_h), 0)
+#define sw_translate_on(_buffer) sw_buffer_set_translation((_buffer), 1)
+#define sw_translate_off(_buffer) sw_buffer_set_translation((_buffer), 0)
 
-#define SW_BLOCK_TAG(_h, _tag, _attrs, _content) \
+#define SW_BLOCK_TAG(_buffer, _tag, _attrs, _content) \
     do { \
-        if (sw_tag((_h), (_tag), _attrs)) { \
+        if (sw_tag((_buffer), (_tag), _attrs)) { \
             _content \
-            (void)sw_end((_h), (_tag)); \
+            (void)sw_end((_buffer), (_tag)); \
         } \
     } while (0)
 
-#define SW_VOID_TAG(_h, _tag, _attrs) \
+#define SW_VOID_TAG(_buffer, _tag, _attrs) \
     do { \
-        (void)sw_void((_h), (_tag), _attrs); \
+        (void)sw_void((_buffer), (_tag), _attrs); \
     } while (0)
 
-#define sw_el(_h, _tag, _attrs, _content) SW_BLOCK_TAG((_h), (_tag), _attrs, _content)
+#define sw_el(_buffer, _tag, _attrs, _content) SW_BLOCK_TAG((_buffer), (_tag), _attrs, _content)
 
-#define sw_html(_h, _attrs, _content) SW_BLOCK_TAG((_h), "html", _attrs, _content)
-#define sw_head(_h, _attrs, _content) SW_BLOCK_TAG((_h), "head", _attrs, _content)
-#define sw_body(_h, _attrs, _content) SW_BLOCK_TAG((_h), "body", _attrs, _content)
-#define sw_main(_h, _attrs, _content) SW_BLOCK_TAG((_h), "main", _attrs, _content)
-#define sw_header(_h, _attrs, _content) SW_BLOCK_TAG((_h), "header", _attrs, _content)
-#define sw_footer(_h, _attrs, _content) SW_BLOCK_TAG((_h), "footer", _attrs, _content)
-#define sw_nav(_h, _attrs, _content) SW_BLOCK_TAG((_h), "nav", _attrs, _content)
-#define sw_section(_h, _attrs, _content) SW_BLOCK_TAG((_h), "section", _attrs, _content)
-#define sw_article(_h, _attrs, _content) SW_BLOCK_TAG((_h), "article", _attrs, _content)
-#define sw_aside(_h, _attrs, _content) SW_BLOCK_TAG((_h), "aside", _attrs, _content)
-#define sw_div(_h, _attrs, _content) SW_BLOCK_TAG((_h), "div", _attrs, _content)
-#define sw_span(_h, _attrs, _content) SW_BLOCK_TAG((_h), "span", _attrs, _content)
-#define sw_p(_h, _attrs, _content) SW_BLOCK_TAG((_h), "p", _attrs, _content)
-#define sw_h1(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h1", _attrs, _content)
-#define sw_h2(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h2", _attrs, _content)
-#define sw_h3(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h3", _attrs, _content)
-#define sw_h4(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h4", _attrs, _content)
-#define sw_h5(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h5", _attrs, _content)
-#define sw_h6(_h, _attrs, _content) SW_BLOCK_TAG((_h), "h6", _attrs, _content)
-#define sw_strong(_h, _attrs, _content) SW_BLOCK_TAG((_h), "strong", _attrs, _content)
-#define sw_em(_h, _attrs, _content) SW_BLOCK_TAG((_h), "em", _attrs, _content)
-#define sw_small(_h, _attrs, _content) SW_BLOCK_TAG((_h), "small", _attrs, _content)
-#define sw_code(_h, _attrs, _content) SW_BLOCK_TAG((_h), "code", _attrs, _content)
-#define sw_pre(_h, _attrs, _content) SW_BLOCK_TAG((_h), "pre", _attrs, _content)
-#define sw_ul(_h, _attrs, _content) SW_BLOCK_TAG((_h), "ul", _attrs, _content)
-#define sw_ol(_h, _attrs, _content) SW_BLOCK_TAG((_h), "ol", _attrs, _content)
-#define sw_li(_h, _attrs, _content) SW_BLOCK_TAG((_h), "li", _attrs, _content)
-#define sw_a(_h, _attrs, _content) SW_BLOCK_TAG((_h), "a", _attrs, _content)
-#define sw_form(_h, _attrs, _content) SW_BLOCK_TAG((_h), "form", _attrs, _content)
-#define sw_label(_h, _attrs, _content) SW_BLOCK_TAG((_h), "label", _attrs, _content)
-#define sw_button(_h, _attrs, _content) SW_BLOCK_TAG((_h), "button", _attrs, _content)
-#define sw_textarea(_h, _attrs, _content) SW_BLOCK_TAG((_h), "textarea", _attrs, _content)
-#define sw_select(_h, _attrs, _content) SW_BLOCK_TAG((_h), "select", _attrs, _content)
-#define sw_option(_h, _attrs, _content) SW_BLOCK_TAG((_h), "option", _attrs, _content)
-#define sw_script(_h, _attrs, _content) SW_BLOCK_TAG((_h), "script", _attrs, _content)
+#define sw_html(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "html", _attrs, _content)
+#define sw_head(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "head", _attrs, _content)
+#define sw_body(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "body", _attrs, _content)
+#define sw_main(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "main", _attrs, _content)
+#define sw_header(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "header", _attrs, _content)
+#define sw_footer(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "footer", _attrs, _content)
+#define sw_nav(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "nav", _attrs, _content)
+#define sw_section(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "section", _attrs, _content)
+#define sw_article(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "article", _attrs, _content)
+#define sw_aside(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "aside", _attrs, _content)
+#define sw_div(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "div", _attrs, _content)
+#define sw_span(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "span", _attrs, _content)
+#define sw_p(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "p", _attrs, _content)
+#define sw_h1(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h1", _attrs, _content)
+#define sw_h2(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h2", _attrs, _content)
+#define sw_h3(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h3", _attrs, _content)
+#define sw_h4(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h4", _attrs, _content)
+#define sw_h5(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h5", _attrs, _content)
+#define sw_h6(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "h6", _attrs, _content)
+#define sw_strong(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "strong", _attrs, _content)
+#define sw_em(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "em", _attrs, _content)
+#define sw_small(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "small", _attrs, _content)
+#define sw_code(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "code", _attrs, _content)
+#define sw_pre(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "pre", _attrs, _content)
+#define sw_ul(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "ul", _attrs, _content)
+#define sw_ol(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "ol", _attrs, _content)
+#define sw_li(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "li", _attrs, _content)
+#define sw_a(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "a", _attrs, _content)
+#define sw_form(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "form", _attrs, _content)
+#define sw_label(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "label", _attrs, _content)
+#define sw_button(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "button", _attrs, _content)
+#define sw_textarea(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "textarea", _attrs, _content)
+#define sw_select(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "select", _attrs, _content)
+#define sw_option(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "option", _attrs, _content)
+#define sw_script(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "script", _attrs, _content)
 
-#define sw_input(_h, _attrs) SW_VOID_TAG((_h), "input", _attrs)
-#define sw_img(_h, _attrs) SW_VOID_TAG((_h), "img", _attrs)
-#define sw_link(_h, _attrs) SW_VOID_TAG((_h), "link", _attrs)
-#define sw_meta(_h, _attrs) SW_VOID_TAG((_h), "meta", _attrs)
-#define sw_br(_h, _attrs) SW_VOID_TAG((_h), "br", _attrs)
-#define sw_hr(_h, _attrs) SW_VOID_TAG((_h), "hr", _attrs)
+#define sw_input(_buffer, _attrs) SW_VOID_TAG((_buffer), "input", _attrs)
+#define sw_img(_buffer, _attrs) SW_VOID_TAG((_buffer), "img", _attrs)
+#define sw_link(_buffer, _attrs) SW_VOID_TAG((_buffer), "link", _attrs)
+#define sw_meta(_buffer, _attrs) SW_VOID_TAG((_buffer), "meta", _attrs)
+#define sw_br(_buffer, _attrs) SW_VOID_TAG((_buffer), "br", _attrs)
+#define sw_hr(_buffer, _attrs) SW_VOID_TAG((_buffer), "hr", _attrs)
 
 #ifdef __cplusplus
 }
