@@ -16,49 +16,54 @@ typedef struct {
     const c8* body;
 } sw_example_feature;
 
-static const c8 sw_example_translation_catalog[] = "resources/translations.json";
-
 static const sw_example_feature sw_example_features[] = {
     { "Live Search", "One helper emits debounced in-page updates without a separate JavaScript asset." },
     { "HTTP Helpers", "Query fields and routes stay readable without manual buffer clearing in every handler." },
     { "Render Functions", "Pages are easier to copy when markup is split into small focused C functions." }
 };
 
-static const sw_language sw_example_languages[] = {
-    { .code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR },
-    { .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL },
-    { .code = "fa", .label = "Farsi", .direction = SW_LANGUAGE_DIRECTION_RTL },
-    { .code = "zh", .label = "Chinese", .direction = SW_LANGUAGE_DIRECTION_LTR },
-    { .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR }
-};
-#define SW_EXAMPLE_LANGUAGE_COUNT ((sz)(sizeof(sw_example_languages) / sizeof(sw_example_languages[0])))
-
 static void resource_path(c8* buffer, sz buffer_len, const c8* relative_path);
-static void register_languages(sw_translator* translator);
-static const sw_language* find_language(const sw_language* language_list, sz language_list_count, const c8* code);
-static const sw_language* select_language(sw_translator* translator, const sw_language* language_list, sz language_list_count, const c8* requested);
+static sw_translator* create_translator(void);
+static const sw_language* find_language(const sw_translator* translator, const c8* code);
+static const sw_language* select_language(sw_translator* translator, const c8* requested);
 static sw_language_direction preview_result_direction(const sw_language* current_language);
 static b8 feature_matches_query(const sw_example_feature* feature, const c8* query, const sw_translator* translator);
 static sz render_feature_list(sw_buffer* h, const c8* query, const sw_translator* translator);
 static void render_preview_status(sw_buffer* h, const c8* query, sz match_count);
-static void render_language_switcher(sw_buffer* h, const sw_language* language_list, sz language_list_count, const sw_language* current_language, const c8* query);
+static void render_language_switcher(sw_buffer* h, const sw_translator* translator, const sw_language* current_language, const c8* query);
 
 static void resource_path(c8* buffer, sz buffer_len, const c8* relative_path) {
     (void)snprintf(buffer, buffer_len, "%s/%s", SYPHAX_WEB_SOURCE_DIR, relative_path);
 }
 
-static void register_languages(sw_translator* translator) {
+static sw_translator* create_translator(void) {
+    char path[1024];
+
+    resource_path(path, sizeof(path), "resources/translations.json");
+    sw_translator* translator = sw_translator_create(path,
+        .code = "en",
+        .label = "English",
+        .direction = SW_LANGUAGE_DIRECTION_LTR
+    );
+
     sw_add_language(translator, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
     sw_add_language(translator, .code = "fa", .label = "Farsi", .direction = SW_LANGUAGE_DIRECTION_RTL);
     sw_add_language(translator, .code = "zh", .label = "Chinese", .direction = SW_LANGUAGE_DIRECTION_LTR);
     sw_add_language(translator, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    return translator;
 }
 
-static const sw_language* find_language(const sw_language* language_list, sz language_list_count, const c8* code) {
+static const sw_language* find_language(const sw_translator* translator, const c8* code) {
+    sz language_count = 0;
+    const sw_language* language_list = sw_translator_get_languages(translator, &language_count);
     sz i;
 
+    if (language_list == NULL || language_count == 0) {
+        return NULL;
+    }
+
     if (code != NULL && code[0] != '\0') {
-        for (i = 0; i < language_list_count; ++i) {
+        for (i = 0; i < language_count; ++i) {
             if (strcmp(language_list[i].code, code) == 0) {
                 return &language_list[i];
             }
@@ -68,16 +73,14 @@ static const sw_language* find_language(const sw_language* language_list, sz lan
     return &language_list[0];
 }
 
-static const sw_language* select_language(
-    sw_translator* translator,
-    const sw_language* language_list,
-    sz language_list_count,
-    const c8* requested
-) {
-    const sw_language* language = find_language(language_list, language_list_count, requested);
+static const sw_language* select_language(sw_translator* translator, const c8* requested) {
+    const sw_language* language = find_language(translator, requested);
 
-    (void)sw_translator_set_language(translator, language->code);
-    return language;
+    if (language != NULL) {
+        (void)sw_translator_set_language(translator, language->code);
+    }
+
+    return sw_translator_get_language(translator);
 }
 
 static sw_language_direction preview_result_direction(const sw_language* current_language) {
@@ -190,11 +193,12 @@ static void render_preview_fragment(sw_buffer* h, const sw_language* current_lan
 
 static void render_language_switcher(
     sw_buffer* h,
-    const sw_language* language_list,
-    sz language_list_count,
+    const sw_translator* translator,
     const sw_language* current_language,
     const c8* query
 ) {
+    sz language_count = 0;
+    const sw_language* language_list = sw_translator_get_languages(translator, &language_count);
     sz i;
 
     sw_div(h, sw_attrs(sw_attr("class", "sw-language-bar")), {
@@ -202,7 +206,7 @@ static void render_language_switcher(
             sw_text(h, "Language");
         });
         sw_div(h, sw_attrs(sw_attr("class", "sw-language-actions"), sw_attr(sw_translation(false))), {
-            for (i = 0; i < language_list_count; ++i) {
+            for (i = 0; i < language_count; ++i) {
                 const sw_language* language = &language_list[i];
 
                 sw_form(h, sw_attrs(
@@ -224,7 +228,7 @@ static void render_language_switcher(
                     }
                     sw_button(h, sw_attrs(
                         sw_attr("class",
-                            (strcmp(language->code, current_language->code) == 0)
+                            (current_language != NULL && strcmp(language->code, current_language->code) == 0)
                                 ? "sw-language-button is-active"
                                 : "sw-language-button"
                         ),
@@ -240,8 +244,7 @@ static void render_language_switcher(
 
 static void render_search_demo(
     sw_buffer* h,
-    const sw_language* language_list,
-    sz language_list_count,
+    const sw_translator* translator,
     const sw_language* current_language,
     const c8* query
 ) {
@@ -249,7 +252,7 @@ static void render_search_demo(
         sw_text(h, "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.");
     });
 
-    render_language_switcher(h, language_list, language_list_count, current_language, query);
+    render_language_switcher(h, translator, current_language, query);
 
     sw_form(h, sw_attrs(
         sw_attr("id", "sw-search-form"),
@@ -342,8 +345,6 @@ static void render_search_preview(
 static void render_root(
     sw_connection* connection,
     const sw_translator* translator,
-    const sw_language* language_list,
-    sz language_list_count,
     const sw_language* current_language,
     const c8* query
 ) {
@@ -371,7 +372,7 @@ static void render_root(
                     sw_text(h, "Syphax Web");
                 });
 
-                render_search_demo(h, language_list, language_list_count, current_language, query);
+                render_search_demo(h, translator, current_language, query);
                 (void)sw_js_live_search(h, "sw-search-form", "sw-search-query", "sw-search-preview", "/search-preview");
                 render_feature_catalog(h);
                 sw_p(h, sw_no_attrs, {
@@ -392,11 +393,11 @@ static void http_handler(sw_connection* connection, const sw_http_message* reque
     char language_code[32];
 
     (void)sw_http_get_query(request, "lang", language_code, sizeof(language_code));
-    current_language = select_language(translator, sw_example_languages, SW_EXAMPLE_LANGUAGE_COUNT, language_code);
+    current_language = select_language(translator, language_code);
 
     if (sw_http_is(request, "GET", "/")) {
         (void)sw_http_get_query(request, "q", query, sizeof(query));
-        render_root(connection, translator, sw_example_languages, SW_EXAMPLE_LANGUAGE_COUNT, current_language, query);
+        render_root(connection, translator, current_language, query);
         return;
     }
     if (sw_http_is(request, "GET", "/style.css")) {
@@ -413,23 +414,11 @@ static void http_handler(sw_connection* connection, const sw_http_message* reque
 }
 
 int main(void) {
-    sw_translator* translator;
-    char catalog_path[1024];
-    i32 rc;
-
-    translator = sw_translator_create(
-        .code = sw_example_languages[0].code,
-        .label = sw_example_languages[0].label,
-        .direction = sw_example_languages[0].direction
-    );
-    register_languages(translator);
-    resource_path(catalog_path, sizeof(catalog_path), sw_example_translation_catalog);
-    (void)sw_translator_load_catalog_all_json_file(translator, catalog_path);
-    (void)sw_translator_set_language(translator, "en");
+    sw_translator* translator = create_translator();
 
     printf("Listening on 0.0.0.0:8000\n");
     printf("Open http://127.0.0.1:8000 in your browser\n");
-    rc = sw_server_listen("http://0.0.0.0:8000", http_handler, translator);
+    i32 rc = sw_server_listen("http://0.0.0.0:8000", http_handler, translator);
     sw_translator_destroy(translator);
     return rc;
 }

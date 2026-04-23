@@ -92,14 +92,17 @@ Open `http://127.0.0.1:8000`.
 
 ## Translations
 
-Catalog file:
+Grouped file:
 
 ```json
 {
-  "Search": {
-    "fr": "Rechercher",
-    "ar": "\u0628\u062d\u062b",
-    "ja": "\u691c\u7d22"
+  "ar": {
+    "Search": "\u0628\u062d\u062b",
+    "Language": "\u0627\u0644\u0644\u063a\u0629"
+  },
+  "ja": {
+    "Search": "\u691c\u7d22",
+    "Language": "\u8a00\u8a9e"
   }
 }
 ```
@@ -109,14 +112,19 @@ Load:
 ```c
 #include "sw_translator.h"
 
-sw_translator* tr = sw_translator_create(.code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
-sw_translator_load_catalog_all_json_file(tr, "resources/translations.json");
-sw_translator_set_language(tr, "fr");
+sw_translator* tr = sw_translator_create("resources/translations.json",
+    .code = "en",
+    .label = "English",
+    .direction = SW_LANGUAGE_DIRECTION_LTR
+);
+sw_add_language(tr, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
+sw_add_language(tr, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+sw_translator_set_language(tr, "ja");
 ```
 
-English is implicit source text. No separate `en.json` needed.
+One file, one object per language. English stays the source-text fallback, so no separate `en.json` is needed.
 
-Installed catalog:
+Installed translations file:
 
 - `share/syphax_web/translations.json`
 

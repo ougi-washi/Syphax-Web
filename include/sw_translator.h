@@ -21,19 +21,18 @@ typedef struct sw_language {
 } sw_language;
 typedef struct sw_translator sw_translator;
 
-SW_API sw_translator* sw_translator_create_internal(const sw_language* default_language);
-#define sw_translator_create(...) sw_translator_create_internal(&(sw_language){__VA_ARGS__})
+SW_API sw_translator* sw_translator_create_internal(const c8* translations_path, const sw_language* default_language);
+#define sw_translator_create(_translations_path, ...) sw_translator_create_internal((_translations_path), &(sw_language){__VA_ARGS__})
 SW_API void sw_add_language_internal(sw_translator* translator, const sw_language* language);
-#define sw_add_language(translator, ...) sw_add_language_internal(translator, &(sw_language){__VA_ARGS__})
+#define sw_add_language(_translator, ...) sw_add_language_internal((_translator), &(sw_language){__VA_ARGS__})
 SW_API void sw_translator_destroy(sw_translator* translator);
 SW_API b8 sw_translator_load_json_text(sw_translator* translator, const c8* lang, const c8* json_text);
 SW_API b8 sw_translator_load_json_file(sw_translator* translator, const c8* lang, const c8* path);
-SW_API b8 sw_translator_load_catalog_json_text(sw_translator* translator, const c8* lang, const c8* json_text);
-SW_API b8 sw_translator_load_catalog_json_file(sw_translator* translator, const c8* lang, const c8* path);
-SW_API b8 sw_translator_load_catalog_all_json_text(sw_translator* translator, const c8* json_text);
-SW_API b8 sw_translator_load_catalog_all_json_file(sw_translator* translator, const c8* path);
+SW_API b8 sw_translator_load_all_json_text(sw_translator* translator, const c8* json_text);
+SW_API b8 sw_translator_load_all_json_file(sw_translator* translator, const c8* path);
 SW_API b8 sw_translator_set_language(sw_translator* translator, const c8* lang);
-SW_API const c8* sw_translator_get_language(const sw_translator* translator);
+SW_API const sw_language* sw_translator_get_language(const sw_translator* translator);
+SW_API const sw_language* sw_translator_get_languages(const sw_translator* translator, sz* count);
 SW_API const c8* sw_translate(const sw_translator* translator, const c8* str);
 
 #ifdef __cplusplus

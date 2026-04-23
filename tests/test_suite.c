@@ -70,21 +70,43 @@ static void repo_path(char* buffer, sz buffer_len, const char* relative_path) {
     assert(snprintf(buffer, buffer_len, "%s/%s", SYPHAX_WEB_SOURCE_DIR, relative_path) > 0);
 }
 
-static void translation_catalog_path(char* buffer, sz buffer_len) {
+static void translation_file_path(char* buffer, sz buffer_len) {
     repo_path(buffer, buffer_len, "resources/translations.json");
 }
 
-static void load_fixture_catalog(sw_translator* translator) {
-    char path[1024];
-
-    sw_add_language(translator, .code = "fr", .label = "French", .direction = SW_LANGUAGE_DIRECTION_LTR);
+static void add_fixture_languages(sw_translator* translator) {
     sw_add_language(translator, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
     sw_add_language(translator, .code = "fa", .label = "Farsi", .direction = SW_LANGUAGE_DIRECTION_RTL);
     sw_add_language(translator, .code = "zh", .label = "Chinese", .direction = SW_LANGUAGE_DIRECTION_LTR);
     sw_add_language(translator, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+}
 
-    translation_catalog_path(path, sizeof(path));
-    assert(sw_translator_load_catalog_all_json_file(translator, path));
+static void load_fixture_translations(sw_translator* translator) {
+    char path[1024];
+
+    add_fixture_languages(translator);
+    translation_file_path(path, sizeof(path));
+    assert(sw_translator_load_all_json_file(translator, path));
+}
+
+static void load_fixture_french(sw_translator* translator) {
+    sw_add_language(translator, .code = "fr", .label = "French", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    assert(sw_translator_load_json_text(translator, "fr",
+        "{"
+            "\"Search\":\"Rechercher\","
+            "\"Language\":\"Langue\""
+        "}"));
+}
+
+static sw_translator* create_fixture_translator(void) {
+    char path[1024];
+    sw_translator* translator;
+
+    translation_file_path(path, sizeof(path));
+    translator = sw_translator_create(path, .code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    assert(translator != NULL);
+    add_fixture_languages(translator);
+    return translator;
 }
 
 static void sw_test_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
@@ -159,40 +181,30 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 }
 
 static void test_translator(void) {
-    sw_translator* translator = sw_translator_create(.code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
-    char catalog_path[1024];
+    sw_translator* translator = sw_translator_create(NULL, .code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator* auto_loaded;
+    char translations_path[1024];
+    const sw_language* languages;
+    const sw_language* current_language;
+    sz language_count = 0;
 
     assert(translator != NULL);
-    assert(strcmp(sw_translator_get_language(translator), "en") == 0);
-    assert(!sw_translator_set_language(translator, "fr"));
+    current_language = sw_translator_get_language(translator);
+    assert(current_language != NULL);
+    assert(strcmp(current_language->code, "en") == 0);
+    assert(!sw_translator_set_language(translator, "ja"));
 
     sw_add_language(translator, .code = "de", .label = "German", .direction = SW_LANGUAGE_DIRECTION_LTR);
     assert(sw_translator_set_language(translator, "de"));
-    assert(strcmp(sw_translator_get_language(translator), "de") == 0);
+    current_language = sw_translator_get_language(translator);
+    assert(current_language != NULL);
+    assert(strcmp(current_language->code, "de") == 0);
     assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
     assert(sw_translator_set_language(translator, "en"));
 
-    translation_catalog_path(catalog_path, sizeof(catalog_path));
-
-    assert(sw_translator_load_catalog_all_json_file(translator, catalog_path));
+    load_fixture_translations(translator);
     assert(sw_translator_set_language(translator, "en"));
     assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
-    assert(sw_translator_set_language(translator, "fr"));
-    assert(strcmp(sw_translator_get_language(translator), "fr") == 0);
-    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
-    assert(strcmp(sw_translate(translator, "Unknown"), "Unknown") == 0);
-    assert(!sw_translator_load_catalog_all_json_text(translator, "[\"bad\"]"));
-    assert(!sw_translator_load_catalog_all_json_text(translator, "{\"Search\": 1}"));
-    assert(!sw_translator_load_catalog_json_file(translator, "fr", "resources/missing-translations.json"));
-    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
-
-    assert(!sw_translator_load_catalog_json_text(translator, "fr", "[\"bad\"]"));
-    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": 1}"));
-    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\": 1}}"));
-    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\":\"A\",\"fr\":\"B\"}}"));
-    assert(!sw_translator_load_catalog_json_text(translator, "fr", "{\"Search\": {\"fr\":\"A\"}, \"Search\": {\"fr\":\"B\"}}"));
-    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
-
     assert(sw_translator_set_language(translator, "ja"));
     assert(strcmp(sw_translate(translator, "Search"), "検索") == 0);
     assert(sw_translator_set_language(translator, "ar"));
@@ -201,11 +213,27 @@ static void test_translator(void) {
     assert(strcmp(sw_translate(translator, "Language"), "زبان") == 0);
     assert(sw_translator_set_language(translator, "zh"));
     assert(strcmp(sw_translate(translator, "Language"), "语言") == 0);
+    assert(strcmp(sw_translate(translator, "Unknown"), "Unknown") == 0);
 
-    assert(sw_translator_load_catalog_json_text(translator, "fr",
+    assert(!sw_translator_load_all_json_text(translator, "[\"bad\"]"));
+    assert(!sw_translator_load_all_json_text(translator, "{\"ar\": 1}"));
+    assert(!sw_translator_load_all_json_text(translator, "{\"ar\": {\"Search\": 1}}"));
+    assert(!sw_translator_load_all_json_text(translator, "{\"ar\": {\"Search\": \"A\", \"Search\": \"B\"}}"));
+    assert(!sw_translator_load_json_file(translator, "fr", "resources/missing-translations.json"));
+
+    load_fixture_french(translator);
+    assert(sw_translator_set_language(translator, "fr"));
+    assert(strcmp(sw_translate(translator, "Search"), "Rechercher") == 0);
+    assert(strcmp(sw_translate(translator, "Language"), "Langue") == 0);
+    assert(strcmp(sw_translate(translator, "Home"), "Home") == 0);
+
+    assert(!sw_translator_load_json_text(translator, "fr", "[\"bad\"]"));
+    assert(!sw_translator_load_json_text(translator, "fr", "{\"Search\": 1}"));
+
+    assert(sw_translator_load_json_text(translator, "fr",
         "{"
-            "\"Search\":{\"fr\":\"Chercher\"},"
-            "\"Language\":{\"fr\":\"Langage\"}"
+            "\"Search\":\"Chercher\","
+            "\"Language\":\"Langage\""
         "}"));
     assert(sw_translator_set_language(translator, "fr"));
     assert(strcmp(sw_translate(translator, "Search"), "Chercher") == 0);
@@ -222,16 +250,31 @@ static void test_translator(void) {
 
     assert(sw_translator_set_language(translator, "en"));
     assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
+
+    translation_file_path(translations_path, sizeof(translations_path));
+    auto_loaded = sw_translator_create(translations_path, .code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    assert(auto_loaded != NULL);
+    assert(sw_translator_set_language(auto_loaded, "ja"));
+    assert(strcmp(sw_translate(auto_loaded, "Search"), "検索") == 0);
+    languages = sw_translator_get_languages(auto_loaded, &language_count);
+    assert(languages != NULL);
+    assert(language_count == 5);
+    assert(strcmp(languages[0].code, "en") == 0);
+    assert(strcmp(languages[1].code, "ar") == 0);
+    assert(strcmp(languages[2].code, "fa") == 0);
+    assert(strcmp(languages[3].code, "zh") == 0);
+    assert(strcmp(languages[4].code, "ja") == 0);
+    sw_translator_destroy(auto_loaded);
+
     sw_translator_destroy(translator);
 }
 
 static void test_html_short_api(void) {
-    sw_translator* translator = sw_translator_create(.code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator* translator = create_fixture_translator();
     sw_buffer* h = sw_buffer_new();
     const c8* html;
 
-    load_fixture_catalog(translator);
-    assert(sw_translator_set_language(translator, "fr"));
+    assert(sw_translator_set_language(translator, "zh"));
     sw_buffer_set_translator(h, translator);
 
     assert(sw_tag(h, "div", sw_attrs(
@@ -249,12 +292,12 @@ static void test_html_short_api(void) {
     assert(sw_text_no_translate(h, "Search"));
     assert(sw_end(h, "div"));
 
-    assert(strstr(sw_buffer_data(h), "title=\"Rechercher\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "placeholder=\"Rechercher\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "aria-label=\"Rechercher\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "title=\"搜索\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "placeholder=\"搜索\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "aria-label=\"搜索\"") != NULL);
     assert(strstr(sw_buffer_data(h), "alt=\"Search\"") != NULL);
     assert(strstr(sw_buffer_data(h), "value=\"&quot;quoted&quot;\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "RechercherSearch") != NULL);
+    assert(strstr(sw_buffer_data(h), "搜索Search") != NULL);
     assert(strstr(sw_buffer_data(h), "</input>") == NULL);
 
     sw_buffer_reset(h);
@@ -269,7 +312,7 @@ static void test_html_short_api(void) {
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
     assert(strstr(html, "title=\"Search\"") != NULL);
-    assert(strstr(html, ">SearchRechercher</div>") != NULL);
+    assert(strstr(html, ">Search搜索</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "HTML", sw_no_attrs));
@@ -286,7 +329,7 @@ static void test_html_short_api(void) {
     assert(strstr(html, "<html lang=\"ar\" dir=\"rtl\">") != NULL);
 
     sw_buffer_reset(h);
-    assert(sw_translator_set_language(translator, "fr"));
+    assert(sw_translator_set_language(translator, "zh"));
     assert(sw_tag(h, "div", sw_attrs(
         sw_attr(sw_translation(0)),
         sw_attr("title", "Search")
@@ -301,7 +344,7 @@ static void test_html_short_api(void) {
     assert(sw_text(h, "Search"));
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
-    assert(strstr(html, "<div title=\"Search\">Search<span title=\"Rechercher\">Rechercher</span>Search</div>") != NULL);
+    assert(strstr(html, "<div title=\"Search\">Search<span title=\"搜索\">搜索</span>Search</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "div", sw_attrs(
@@ -311,7 +354,7 @@ static void test_html_short_api(void) {
     assert(sw_text(h, "Search"));
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
-    assert(strstr(html, "<div dir=\"ltr\" data-sw-direction=\"ttb\" style=\"border-color:currentColor;writing-mode:vertical-rl;text-orientation:mixed;\">Rechercher</div>") != NULL);
+    assert(strstr(html, "<div dir=\"ltr\" data-sw-direction=\"ttb\" style=\"border-color:currentColor;writing-mode:vertical-rl;text-orientation:mixed;\">搜索</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "section", sw_no_attrs));
@@ -324,7 +367,7 @@ static void test_html_short_api(void) {
     assert(sw_end(h, "html"));
     html = sw_buffer_data(h);
     assert(strstr(html, "<!doctype html>") == NULL);
-    assert(strstr(html, "prefix<html lang=\"fr\" dir=\"ltr\"></html>") != NULL);
+    assert(strstr(html, "prefix<html lang=\"zh\" dir=\"ltr\"></html>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "html", sw_no_attrs));
@@ -341,12 +384,11 @@ static void test_html_short_api(void) {
 }
 
 static void test_html_short_macros(void) {
-    sw_translator* translator = sw_translator_create(.code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator* translator = create_fixture_translator();
     sw_buffer* h = sw_buffer_new();
     const c8* html;
 
-    load_fixture_catalog(translator);
-    assert(sw_translator_set_language(translator, "fr"));
+    assert(sw_translator_set_language(translator, "zh"));
     sw_buffer_set_translator(h, translator);
 
     assert(sw_title(h, "Search"));
@@ -380,17 +422,17 @@ static void test_html_short_macros(void) {
     });
 
     html = sw_buffer_data(h);
-    assert(strstr(html, "<title>Rechercher</title>") != NULL);
+    assert(strstr(html, "<title>搜索</title>") != NULL);
     assert(strstr(html, "<title>Search</title>") != NULL);
     assert(strstr(html, "data-mode=\"demo\"") != NULL);
     assert(strstr(html, "data-label=\"Search\"") != NULL);
-    assert(strstr(html, "placeholder=\"Rechercher\"") != NULL);
+    assert(strstr(html, "placeholder=\"搜索\"") != NULL);
     assert(strstr(html, "data-role=\"search\"") != NULL);
     assert(strstr(html, "hidden") != NULL);
     assert(strstr(html, "selected") != NULL);
     assert(strstr(html, "disabled") != NULL);
     assert(strstr(html, "</input>") == NULL);
-    assert(strstr(html, "RechercherSearch") != NULL);
+    assert(strstr(html, "搜索Search") != NULL);
     assert(strstr(html, "<a href=\"/docs\">Docs</a>") != NULL);
     assert(strstr(html, "<button type=\"button\">Open</button>") != NULL);
     assert(strstr(html, "<custom-card data-role=\"demo\">Custom</custom-card>") != NULL);
