@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,13 @@
 #    include <unistd.h>
 #endif
 
+#if defined(SYPHAX_WEB_HAS_TLS)
+#    include <openssl/pem.h>
+#    include <openssl/rsa.h>
+#    include <openssl/ssl.h>
+#    include <openssl/x509v3.h>
+#endif
+
 typedef struct {
     const c8* file_path;
     const c8* docroot;
@@ -37,10 +45,67 @@ typedef struct {
 } sw_test_server_state;
 
 typedef struct {
+    int request_count;
+    b8 saw_secure;
+    char alpn[16];
+} sw_test_tls_state;
+
+typedef struct {
     char* data;
     sz size;
     b8 closed;
 } sw_test_response;
+
+#if defined(SYPHAX_WEB_HAS_TLS)
+static void write_test_tls_files(const char* cert_path, const char* key_path) {
+    EVP_PKEY* pkey = NULL;
+    EVP_PKEY_CTX* pkey_ctx = NULL;
+    X509* cert = NULL;
+    X509_NAME* name = NULL;
+    X509_EXTENSION* extension = NULL;
+    FILE* cert_file = NULL;
+    FILE* key_file = NULL;
+
+    pkey_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    assert(pkey_ctx != NULL);
+    assert(EVP_PKEY_keygen_init(pkey_ctx) > 0);
+    assert(EVP_PKEY_CTX_set_rsa_keygen_bits(pkey_ctx, 2048) > 0);
+    assert(EVP_PKEY_keygen(pkey_ctx, &pkey) > 0);
+    EVP_PKEY_CTX_free(pkey_ctx);
+
+    cert = X509_new();
+    assert(cert != NULL);
+    assert(ASN1_INTEGER_set(X509_get_serialNumber(cert), 1) == 1);
+    assert(X509_gmtime_adj(X509_get_notBefore(cert), 0) != NULL);
+    assert(X509_gmtime_adj(X509_get_notAfter(cert), 3600) != NULL);
+    assert(X509_set_pubkey(cert, pkey) == 1);
+
+    name = X509_get_subject_name(cert);
+    assert(name != NULL);
+    assert(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char*)"localhost", -1, -1, 0) == 1);
+    assert(X509_set_issuer_name(cert, name) == 1);
+
+    extension = X509V3_EXT_conf_nid(NULL, NULL, NID_subject_alt_name, "DNS:localhost,IP:127.0.0.1");
+    assert(extension != NULL);
+    assert(X509_add_ext(cert, extension, -1) == 1);
+    X509_EXTENSION_free(extension);
+
+    assert(X509_sign(cert, pkey, EVP_sha256()) > 0);
+
+    key_file = fopen(key_path, "wb");
+    assert(key_file != NULL);
+    assert(PEM_write_PrivateKey(key_file, pkey, NULL, NULL, 0, NULL, NULL) == 1);
+    fclose(key_file);
+
+    cert_file = fopen(cert_path, "wb");
+    assert(cert_file != NULL);
+    assert(PEM_write_X509(cert_file, cert) == 1);
+    fclose(cert_file);
+
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+}
+#endif
 
 #ifdef _WIN32
 typedef SOCKET sw_test_socket;
@@ -234,6 +299,26 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
         assert(sw_http_reply(connection, 200, "text/html; charset=utf-8",
             sw_buffer_data(h), sw_buffer_len(h)) == 0);
         sw_buffer_free(h);
+        return;
+    }
+
+    sw_http_replyf(connection, 404, "text/plain; charset=utf-8", "Not Found");
+}
+
+static void sw_tls_test_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
+    sw_test_tls_state* state = (sw_test_tls_state*)user_data;
+    const c8* alpn = sw_connection_alpn(connection);
+
+    state->request_count += 1;
+    state->saw_secure = sw_connection_is_secure(connection);
+    snprintf(state->alpn, sizeof(state->alpn), "%s", alpn != NULL ? alpn : "");
+
+    if (sw_http_is(request, "GET", "/")) {
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+            "secure=%d alpn=%s proto=%s",
+            state->saw_secure ? 1 : 0,
+            state->alpn,
+            request->proto != NULL ? request->proto : "");
         return;
     }
 
@@ -740,12 +825,17 @@ static void test_public_short_names(void) {
     static const char* const paths[] = {
         "include/sw_html.h",
         "include/sw_js.h",
-        "examples/static.c",
+        "examples/example_common.h",
+        "examples/01_simple.c",
+        "examples/02_ssl.c",
+        "examples/03_complex_static.c",
+        "examples/04_complex_dynamic.c",
+        "examples/05_web_app.c",
         "tests/test_suite.c",
         "README.md"
     };
     static const char* const easy_paths[] = {
-        "examples/static.c",
+        "examples/01_simple.c",
         "README.md"
     };
     sz i;
@@ -941,6 +1031,149 @@ static void assert_complete_response(const sw_test_response* response) {
     assert(response->closed);
     assert(response_content_length(response) == response_body_size(response));
 }
+
+#if defined(SYPHAX_WEB_HAS_TLS)
+static b8 sw_test_ssl_wants_retry(SSL* ssl, int rc) {
+    const int err = SSL_get_error(ssl, rc);
+    return err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE;
+}
+
+static b8 sw_test_ssl_error_wants_retry(int err) {
+    return err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE;
+}
+
+static void sw_test_tls_handshake(sw_mgr* mgr, SSL* ssl) {
+    int attempts;
+
+    for (attempts = 0; attempts < 200; ++attempts) {
+        const int rc = SSL_connect(ssl);
+        if (rc == 1) {
+            return;
+        }
+        assert(sw_test_ssl_wants_retry(ssl, rc));
+        assert(sw_mgr_poll(mgr, 10) >= 0);
+    }
+
+    assert(!"TLS client handshake timed out");
+}
+
+static void sw_test_tls_write_all(sw_mgr* mgr, SSL* ssl, const c8* data, sz data_len) {
+    sz offset = 0;
+    int attempts = 0;
+
+    while (offset < data_len && attempts < 200) {
+        const sz remaining = data_len - offset;
+        const int chunk_len = remaining > (sz)INT_MAX ? INT_MAX : (int)remaining;
+        const int rc = SSL_write(ssl, data + offset, chunk_len);
+        if (rc > 0) {
+            offset += (sz)rc;
+            attempts = 0;
+            continue;
+        }
+        assert(sw_test_ssl_wants_retry(ssl, rc));
+        assert(sw_mgr_poll(mgr, 10) >= 0);
+        ++attempts;
+    }
+
+    assert(offset == data_len);
+}
+
+static b8 sw_test_response_has_complete_body(const sw_test_response* response) {
+    return response != NULL
+        && strstr(response->data, "\r\n\r\n") != NULL
+        && strstr(response->data, "Content-Length:") != NULL
+        && response_content_length(response) == response_body_size(response);
+}
+
+static sw_test_response issue_tls_request(
+    sw_mgr* mgr,
+    u16 port,
+    const c8* request,
+    const unsigned char* alpn,
+    unsigned int alpn_len,
+    char* selected_alpn,
+    sz selected_alpn_len
+) {
+    SSL_CTX* ctx;
+    SSL* ssl;
+    sw_test_socket fd;
+    sw_test_response response = {0};
+    sz response_len = 0;
+    int attempts;
+
+    if (selected_alpn != NULL && selected_alpn_len > 0) {
+        selected_alpn[0] = '\0';
+    }
+
+    assert(OPENSSL_init_ssl(0, NULL) == 1);
+    ctx = SSL_CTX_new(TLS_client_method());
+    assert(ctx != NULL);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+
+    fd = connect_to_port(port);
+    ssl = SSL_new(ctx);
+    assert(ssl != NULL);
+    SSL_set_fd(ssl, (int)fd);
+    SSL_set_connect_state(ssl);
+    assert(SSL_set_tlsext_host_name(ssl, "localhost") == 1);
+    if (alpn != NULL && alpn_len > 0) {
+        assert(SSL_set_alpn_protos(ssl, alpn, alpn_len) == 0);
+    }
+
+    sw_test_tls_handshake(mgr, ssl);
+
+    if (selected_alpn != NULL && selected_alpn_len > 0) {
+        const unsigned char* selected = NULL;
+        unsigned int selected_len = 0;
+        sz copy_len;
+        SSL_get0_alpn_selected(ssl, &selected, &selected_len);
+        copy_len = selected_len < selected_alpn_len - 1 ? selected_len : selected_alpn_len - 1;
+        if (selected != NULL && copy_len > 0) {
+            memcpy(selected_alpn, selected, copy_len);
+        }
+        selected_alpn[copy_len] = '\0';
+    }
+
+    sw_test_tls_write_all(mgr, ssl, request, strlen(request));
+
+    response.data = (char*)calloc(1, 65536);
+    assert(response.data != NULL);
+    for (attempts = 0; attempts < 200; ++attempts) {
+        char chunk[4096];
+        const int rc = SSL_read(ssl, chunk, sizeof(chunk));
+        if (rc > 0) {
+            memcpy(response.data + response_len, chunk, (sz)rc);
+            response_len += (sz)rc;
+            response.data[response_len] = '\0';
+            response.size = response_len;
+            if (sw_test_response_has_complete_body(&response)) {
+                break;
+            }
+            continue;
+        }
+        {
+            const int err = SSL_get_error(ssl, rc);
+            if (err == SSL_ERROR_ZERO_RETURN) {
+                response.closed = 1;
+                break;
+            }
+            assert(sw_test_ssl_error_wants_retry(err));
+        }
+        assert(sw_mgr_poll(mgr, 10) >= 0);
+    }
+
+    response.size = response_len;
+    (void)SSL_shutdown(ssl);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    return response;
+}
+#endif
 
 static void test_live_server(void) {
     sw_mgr* mgr = sw_mgr_create(NULL);
@@ -1145,6 +1378,70 @@ static void test_server_config(void) {
     sw_mgr_destroy(mgr);
 }
 
+static void test_tls_support(void) {
+    sw_tls_config tls = sw_tls_config_default();
+    sw_mgr* mgr = sw_mgr_create(NULL);
+
+    assert(mgr != NULL);
+
+#if defined(SYPHAX_WEB_HAS_TLS)
+    {
+        static const unsigned char alpn_h2_http11[] = { 2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
+        sw_test_tls_state state = {0};
+        char cert_name[256];
+        char key_name[256];
+        char cert_path[512];
+        char key_path[512];
+        char selected_alpn[16];
+        u16 port;
+        sw_test_response response;
+
+        assert(sw_generate_unique_filename("syphax-web-test-cert.pem", cert_name, sizeof(cert_name)));
+        assert(sw_generate_unique_filename("syphax-web-test-key.pem", key_name, sizeof(key_name)));
+        temp_path(cert_path, sizeof(cert_path), cert_name);
+        temp_path(key_path, sizeof(key_path), key_name);
+        write_test_tls_files(cert_path, key_path);
+
+        tls.certificate_file = cert_path;
+        tls.private_key_file = key_path;
+        tls.handshake_timeout_ms = 250;
+
+        assert(sw_https_listen(mgr, "http://127.0.0.1:0", &tls, sw_tls_test_handler, &state) != 0);
+        assert(sw_https_listen(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, &state) == 0);
+        port = sw_mgr_get_listener_port(mgr, 0);
+        assert(port != 0);
+
+        response = issue_tls_request(mgr, port,
+            "GET / HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "\r\n",
+            alpn_h2_http11,
+            sizeof(alpn_h2_http11),
+            selected_alpn,
+            sizeof(selected_alpn));
+        assert(sw_test_response_has_complete_body(&response));
+        assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+        assert(strstr(response.data, "secure=1") != NULL);
+        assert(strstr(response.data, "alpn=http/1.1") != NULL);
+        assert(strstr(response.data, "proto=HTTP/1.1") != NULL);
+        assert(strcmp(selected_alpn, "http/1.1") == 0);
+        assert(state.request_count == 1);
+        assert(state.saw_secure);
+        assert(strcmp(state.alpn, "http/1.1") == 0);
+        free(response.data);
+
+        remove(cert_path);
+        remove(key_path);
+    }
+#else
+    tls.certificate_file = "missing-cert.pem";
+    tls.private_key_file = "missing-key.pem";
+    assert(sw_https_listen(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, NULL) != 0);
+#endif
+
+    sw_mgr_destroy(mgr);
+}
+
 typedef void (*sw_test_fn)(void);
 
 typedef struct {
@@ -1161,7 +1458,8 @@ static const sw_named_test sw_named_tests[] = {
     { "request_helpers", test_request_helpers },
     { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server },
-    { "server_config", test_server_config }
+    { "server_config", test_server_config },
+    { "tls_support", test_tls_support }
 };
 
 static int run_named_test(const char* name) {

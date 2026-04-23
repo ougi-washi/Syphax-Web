@@ -3,6 +3,7 @@
 Small C web library.
 
 - HTTP server
+- optional OpenSSL-backed TLS
 - HTML builder
 - inline JS helpers
 - JSON translations
@@ -20,19 +21,26 @@ Library-first. Examples and tests are optional.
 ## Build
 
 ```bash
-git submodule update --init --recursive
-
-cmake -S . -B build \
-  -DSYPHAX_WEB_BUILD_EXAMPLES=ON \
-  -DSYPHAX_WEB_BUILD_TESTS=ON
-
-cmake --build build --parallel "$(getconf _NPROCESSORS_ONLN)"
+./build.sh
 ctest --test-dir build --output-on-failure
 ```
 
-Repo binaries:
+Enable native HTTPS support with OpenSSL:
 
-- `bin/syphax_web_static`
+```bash
+./build.sh -tls
+ctest --test-dir build-tls --output-on-failure
+```
+
+Run `./build.sh --help` for build script options. The script reuses the selected build directory, so repeat runs are incremental unless `-clean` is passed.
+
+Repo binaries when examples and tests are enabled:
+
+- `bin/01_simple`
+- `bin/02_ssl`
+- `bin/03_complex_static`
+- `bin/04_complex_dynamic`
+- `bin/05_web_app`
 - `bin/syphax_web_tests`
 
 Install:
@@ -84,6 +92,24 @@ int main(void) {
 ```
 
 Open `http://127.0.0.1:8000`.
+
+## HTTPS Server
+
+Native TLS is opt-in at build time with `SYPHAX_WEB_ENABLE_TLS=ON`.
+
+```c
+int main(void) {
+    sw_http_config http = sw_http_config_default();
+    sw_tls_config tls = sw_tls_config_default();
+
+    tls.certificate_file = "/etc/ssl/example/fullchain.pem";
+    tls.private_key_file = "/etc/ssl/example/privkey.pem";
+
+    return sw_server_listen_tls("https://0.0.0.0:8443", &http, &tls, handler, NULL);
+}
+```
+
+TLS listeners serve HTTP/1.1 over TLS and negotiate ALPN `http/1.1` only. They do not advertise `h2`.
 
 ## Static Files
 
@@ -156,28 +182,44 @@ Installed translations file:
 
 - `share/syphax_web/translations.json`
 
-## Example
+## Examples
 
-`bin/syphax_web_static` serves:
+All examples use the shared stylesheet in `examples/shared/style.css`.
 
-- `/`
-- `/search-preview`
-- `/style.css`
+- `bin/01_simple`: HTTP-only minimal server on `http://127.0.0.1:8000`
+- `bin/02_ssl`: HTTPS status page on `https://127.0.0.1:8443`
+- `bin/03_complex_static`: HTTPS static site with HTML, JSON, text, and CSS routes on `https://127.0.0.1:8444`
+- `bin/04_complex_dynamic`: HTTPS dynamic queue using query/form helpers and inline JS helpers on `https://127.0.0.1:8445`
+- `bin/05_web_app`: HTTPS folder app served from `examples/advanced` on `https://127.0.0.1:8446`
 
-Features in the example:
+The TLS examples require a certificate and private key. Do not commit private keys to the repo. For local HTTPS, generate a localhost certificate with a local CA such as `mkcert`:
 
-- live search
-- language buttons: `en`, `ar`, `fa`, `zh`, `ja`
-- translated HTML
-- bounded request/time config via `sw_http_config_default`
-- docroot-scoped static serving via `sw_http_serve_path`
-- vertical preview text for `zh` and `ja` via `sw_attr(sw_direction(SW_LANGUAGE_DIRECTION_TTB))`
+```bash
+TRUST_STORES=system,nss mkcert -install
+mkcert \
+  -cert-file examples/shared/localhost.local.crt \
+  -key-file examples/shared/localhost.local.key \
+  localhost 127.0.0.1 ::1
+
+./build.sh -tls
+./bin/02_ssl
+```
+
+The examples automatically use `examples/shared/localhost.local.crt` and `examples/shared/localhost.local.key` when they exist. Those files are ignored by git. You can also point at a real certificate explicitly:
+
+If the browser still shows a warning after `mkcert -install`, restart the browser and open `https://127.0.0.1:8443` again. Firefox may need NSS trust-store installation, which is why the command above sets `TRUST_STORES=system,nss`.
+
+```bash
+SYPHAX_WEB_TLS_CERT=/path/to/fullchain.pem \
+SYPHAX_WEB_TLS_KEY=/path/to/privkey.pem \
+./bin/02_ssl
+```
 
 ## Scope
 
 - request size and timeout config defaults are enforced, but this is still a small HTTP/1.1 server layer rather than a full edge proxy
-- no TLS
-- no HTTP/2
+- native TLS is available only when built with OpenSSL
+- HTTP/2 is not implemented natively; use nginx, Caddy, HAProxy, or another edge proxy to terminate HTTP/2 and forward HTTP/1.1 to `sw_http_listen`
 - no chunked request decoding
 
 ## License

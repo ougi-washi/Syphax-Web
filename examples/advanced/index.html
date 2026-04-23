@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Syphax-Web Folder App</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="page">
+  <main class="shell wide app-shell">
+    <section class="hero compact">
+      <span class="kicker secure">Folder App</span>
+      <h1>Release workspace</h1>
+      <p class="lead">A browser app loaded from examples/advanced with HTML, CSS, JavaScript, and a small JSON endpoint.</p>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <h2>Transport</h2>
+        <pre><code id="transport-json">Loading...</code></pre>
+      </article>
+      <article class="card">
+        <h2>Checklist</h2>
+        <form id="task-form" class="app-form">
+          <input id="task-input" type="text" autocomplete="off" placeholder="Add a release task">
+          <button class="button" type="submit">Add</button>
+        </form>
+        <ul id="task-list" class="task-list"></ul>
+      </article>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+.app-shell{
+  display:grid;
+  gap:22px;
+}
+
+.app-form{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:10px;
+}
+
+.task-list{
+  display:grid;
+  gap:8px;
+  margin:14px 0 0;
+  padding:0;
+  list-style:none;
+}
+
+.task-list li{
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  background:var(--surface-2);
+}
+
+.task-list button{
+  border:0;
+  background:transparent;
+  color:var(--red);
+  font:800 0.82rem/1 var(--mono);
+  cursor:pointer;
+}
+
+@media (max-width:620px){
+  .app-form{grid-template-columns:1fr}
+}

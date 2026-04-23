@@ -84,8 +84,10 @@ int sw_backend_poll(sw_mgr* mgr, i32 timeout_ms) {
         sw_connection* connection = s_array_get_data(&mgr->connections)[i];
         const sz index = listener_count + i;
         fds[index].fd = connection->fd;
-        fds[index].events = POLLRDNORM;
-        if (sw_connection_has_pending_output(connection)) {
+        if (sw_connection_wants_read(connection)) {
+            fds[index].events |= POLLRDNORM;
+        }
+        if (sw_connection_wants_write(connection)) {
             fds[index].events |= POLLWRNORM;
         }
         sources[index] = connection;

@@ -15,8 +15,11 @@ struct sw_backend {
 };
 
 static uint32_t sw_backend_connection_events(const sw_connection* connection) {
-    uint32_t events = EPOLLIN | EPOLLRDHUP;
-    if (sw_connection_has_pending_output(connection)) {
+    uint32_t events = EPOLLRDHUP;
+    if (sw_connection_wants_read(connection)) {
+        events |= EPOLLIN;
+    }
+    if (sw_connection_wants_write(connection)) {
         events |= EPOLLOUT;
     }
     return events;

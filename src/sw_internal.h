@@ -37,6 +37,11 @@ typedef int sw_socket;
 #    define SW_INVALID_SOCKET (-1)
 #endif
 
+#if defined(SYPHAX_WEB_HAS_TLS)
+typedef struct ssl_ctx_st SSL_CTX;
+typedef struct ssl_st SSL;
+#endif
+
 typedef struct sw_backend sw_backend;
 typedef struct sw_listener sw_listener;
 typedef struct sw_connection sw_connection;
@@ -90,6 +95,11 @@ struct sw_listener {
     s_handle array_handle;
     struct sw_mgr* mgr;
     u16 bound_port;
+    b8 tls_enabled;
+#if defined(SYPHAX_WEB_HAS_TLS)
+    SSL_CTX* tls_ctx;
+    i32 tls_handshake_timeout_ms;
+#endif
 };
 
 struct sw_connection {
@@ -115,6 +125,18 @@ struct sw_connection {
     f64 last_activity_at_ms;
     c8 remote_ip[64];
     u16 remote_port;
+    b8 secure;
+    c8 alpn[16];
+#if defined(SYPHAX_WEB_HAS_TLS)
+    SSL* tls;
+    b8 tls_handshake_complete;
+    b8 tls_want_read;
+    b8 tls_want_write;
+    b8 tls_read_wants_write;
+    b8 tls_write_wants_read;
+    f64 tls_handshake_started_at_ms;
+    i32 tls_handshake_timeout_ms;
+#endif
 };
 
 struct sw_mgr {
@@ -157,5 +179,7 @@ int sw_mgr_sync_connection(sw_mgr* mgr, sw_connection* connection);
 void sw_mgr_close_connection(sw_mgr* mgr, sw_connection* connection);
 void sw_connection_reset_request(sw_connection* connection);
 b8 sw_connection_has_pending_output(const sw_connection* connection);
+b8 sw_connection_wants_read(const sw_connection* connection);
+b8 sw_connection_wants_write(const sw_connection* connection);
 
 #endif

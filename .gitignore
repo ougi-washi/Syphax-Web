@@ -56,7 +56,12 @@ dkms.conf
 
 # build files
 build/
+build-*/
 bin/
 Testing/
 .cache/
+.codex
+.codex/
 file_*.txt
+examples/shared/*.key
+examples/shared/localhost*.crt
