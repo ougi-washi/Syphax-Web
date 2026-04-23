@@ -46,6 +46,65 @@ jobs:
           cmake --install build --prefix "${{ github.workspace }}/install"
           test -f "${{ github.workspace }}/install/share/syphax_web/translations.json"
 
+      - name: Consumer smoke test
+        run: |
+          mkdir -p consumer
+          cat > consumer/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(syphax_web_consumer C)
+          find_package(syphax_web CONFIG REQUIRED)
+          add_executable(consumer main.c)
+          target_link_libraries(consumer PRIVATE syphax_web::syphax_web)
+          EOF
+          cat > consumer/main.c <<'EOF'
+          #include "sw_html.h"
+          int main(void) {
+              sw_buffer* buffer = sw_buffer_new();
+              sw_buffer_free(buffer);
+              return 0;
+          }
+          EOF
+          cmake -S consumer -B consumer/build -G Ninja -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install"
+          cmake --build consumer/build --parallel "$(nproc)"
+
+  linux-sanitizers:
+    name: Linux Sanitizers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Configure
+        env:
+          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined
+        run: >
+          cmake -S . -B build-asan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DSYPHAX_WEB_BUILD_EXAMPLES=ON
+          -DSYPHAX_WEB_BUILD_TESTS=ON
+          -DSYPHAX_WEB_ENABLE_WARNINGS=ON
+
+      - name: Build
+        env:
+          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined
+        run: cmake --build build-asan --parallel "$(nproc)"
+
+      - name: Run tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build-asan --output-on-failure
+
   windows:
     name: Windows
     runs-on: windows-latest

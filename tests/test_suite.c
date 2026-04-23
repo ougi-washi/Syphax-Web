@@ -26,11 +26,13 @@
 #    include <fcntl.h>
 #    include <netinet/in.h>
 #    include <sys/socket.h>
+#    include <sys/stat.h>
 #    include <unistd.h>
 #endif
 
 typedef struct {
     const c8* file_path;
+    const c8* docroot;
     int request_count;
 } sw_test_server_state;
 
@@ -72,6 +74,58 @@ static void repo_path(char* buffer, sz buffer_len, const char* relative_path) {
 
 static void translation_file_path(char* buffer, sz buffer_len) {
     repo_path(buffer, buffer_len, "resources/translations.json");
+}
+
+static void temp_path(char* buffer, sz buffer_len, const char* name) {
+    assert(buffer != NULL);
+    assert(buffer_len > 0);
+    assert(name != NULL);
+#ifdef _WIN32
+    {
+        DWORD temp_dir_len = GetTempPathA((DWORD)buffer_len, buffer);
+        assert(temp_dir_len > 0);
+        assert(temp_dir_len < buffer_len);
+        assert(snprintf(buffer + temp_dir_len, buffer_len - (sz)temp_dir_len, "%s", name) > 0);
+    }
+#else
+    assert(snprintf(buffer, buffer_len, "/tmp/%s", name) > 0);
+#endif
+}
+
+static void sw_test_sleep_ms(i32 duration_ms) {
+#ifdef _WIN32
+    Sleep((DWORD)(duration_ms > 0 ? duration_ms : 0));
+#else
+    usleep((useconds_t)((duration_ms > 0 ? duration_ms : 0) * 1000));
+#endif
+}
+
+static void create_temp_directory(char* buffer, sz buffer_len, const char* seed_name) {
+    char candidate_name[256];
+    int attempt;
+
+    assert(buffer != NULL);
+    assert(buffer_len > 0);
+    assert(seed_name != NULL);
+
+    for (attempt = 0; attempt < 16; ++attempt) {
+        assert(sw_generate_unique_filename(seed_name, candidate_name, sizeof(candidate_name)));
+        temp_path(buffer, buffer_len, candidate_name);
+#ifdef _WIN32
+        if (CreateDirectoryA(buffer, NULL) != 0) {
+            return;
+        }
+#else
+        if (mkdir(buffer, 0700) == 0) {
+            return;
+        }
+        if (errno != EEXIST) {
+            break;
+        }
+#endif
+    }
+
+    assert(!"failed to create temporary directory");
 }
 
 static void add_fixture_languages(sw_translator* translator) {
@@ -149,6 +203,12 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 
     if (sw_http_is(request, "GET", "/file")) {
         assert(sw_http_serve_file(connection, state->file_path) == 0);
+        return;
+    }
+
+    if (request->method != NULL && strcmp(request->method, "GET") == 0
+        && request->uri != NULL && strncmp(request->uri, "/public/", 8) == 0) {
+        assert(sw_http_serve_path(connection, state->docroot, request->uri + 7) == 0);
         return;
     }
 
@@ -532,6 +592,10 @@ static void test_js_short_api(void) {
     assert(strstr(html, "\\n") != NULL);
     assert(strstr(html, "\\\\") != NULL);
     assert(strstr(html, "\\x3C/script>") != NULL);
+    assert(strstr(html, "data-sw-state") != NULL);
+    assert(strstr(html, "aria-busy") != NULL);
+    assert(strstr(html, "restoreFocus") != NULL);
+    assert(strstr(html, "data-sw-error") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_js_runtime(h));
@@ -541,14 +605,18 @@ static void test_js_short_api(void) {
 
 static void test_request_helpers(void) {
     sw_http_header headers[] = {
-        { "Content-Type", "multipart/form-data; boundary=demo" }
+        { "Content-Type", "multipart/form-data; boundary=\"demo\"" }
     };
-    const c8 body[] =
+    const c8 multipart_body[] =
         "--demo\r\n"
         "Content-Disposition: form-data; name=\"file\"; filename=\"hello.txt\"\r\n"
         "Content-Type: text/plain\r\n"
         "\r\n"
-        "payload\r\n"
+        "ab\0cd\r\n"
+        "--demo\r\n"
+        "Content-Disposition: form-data; name=\"note\"\r\n"
+        "\r\n"
+        "hello\r\n"
         "--demo--\r\n";
     const sw_http_message message = {
         .method = "POST",
@@ -566,9 +634,9 @@ static void test_request_helpers(void) {
         .proto = "HTTP/1.1",
         .headers = headers,
         .num_headers = 1,
-        .body = body,
-        .body_len = sizeof(body) - 1,
-        .content_length = sizeof(body) - 1
+        .body = multipart_body,
+        .body_len = sizeof(multipart_body) - 1,
+        .content_length = sizeof(multipart_body) - 1
     };
     char value[64];
     sz offset = 0;
@@ -598,7 +666,17 @@ static void test_request_helpers(void) {
     assert(strcmp(part.name, "file") == 0);
     assert(strcmp(part.filename, "hello.txt") == 0);
     assert(strcmp(part.content_type, "text/plain") == 0);
-    assert(strncmp(part.data, "payload", part.data_len) == 0);
+    assert(part.data_len == 5);
+    assert(memcmp(part.data, "ab\0cd", part.data_len) == 0);
+    sw_http_multipart_clear(&part);
+
+    memset(&part, 0, sizeof(part));
+    assert(sw_http_next_multipart(&multipart_message, &part, &offset) == 1);
+    assert(strcmp(part.name, "note") == 0);
+    assert(part.filename == NULL);
+    assert(part.content_type == NULL);
+    assert(part.data_len == 5);
+    assert(memcmp(part.data, "hello", part.data_len) == 0);
     sw_http_multipart_clear(&part);
 }
 
@@ -760,6 +838,88 @@ static sw_test_response issue_request(sw_mgr* mgr, u16 port, const c8* request) 
     return response;
 }
 
+static sw_test_response issue_request_bytes(sw_mgr* mgr, u16 port, const void* request, sz request_len) {
+    sw_test_socket fd = connect_to_port(port);
+    sw_test_response response = {0};
+    sz response_len = 0;
+    int attempts;
+
+    response.data = (char*)calloc(1, 65536);
+    assert(response.data != NULL);
+    assert(send(fd, request, (int)request_len, 0) == (int)request_len);
+
+    for (attempts = 0; attempts < 200; ++attempts) {
+        char chunk[4096];
+        int received;
+        assert(sw_mgr_poll(mgr, 10) >= 0);
+        received = (int)recv(fd, chunk, sizeof(chunk), 0);
+        if (received > 0) {
+            memcpy(response.data + response_len, chunk, (sz)received);
+            response_len += (sz)received;
+            response.data[response_len] = '\0';
+            continue;
+        }
+        if (received == 0) {
+            response.closed = 1;
+            break;
+        }
+#ifdef _WIN32
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+#endif
+            break;
+        }
+    }
+
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    response.size = response_len;
+    return response;
+}
+
+static sw_test_response read_response_from_socket(sw_mgr* mgr, sw_test_socket fd, int max_attempts, i32 poll_ms, i32 sleep_ms) {
+    sw_test_response response = {0};
+    sz response_len = 0;
+    int attempts;
+
+    response.data = (char*)calloc(1, 65536);
+    assert(response.data != NULL);
+
+    for (attempts = 0; attempts < max_attempts; ++attempts) {
+        char chunk[4096];
+        int received;
+        if (sleep_ms > 0) {
+            sw_test_sleep_ms(sleep_ms);
+        }
+        assert(sw_mgr_poll(mgr, poll_ms) >= 0);
+        received = (int)recv(fd, chunk, sizeof(chunk), 0);
+        if (received > 0) {
+            memcpy(response.data + response_len, chunk, (sz)received);
+            response_len += (sz)received;
+            response.data[response_len] = '\0';
+            continue;
+        }
+        if (received == 0) {
+            response.closed = 1;
+            break;
+        }
+#ifdef _WIN32
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+#endif
+            break;
+        }
+    }
+
+    response.size = response_len;
+    return response;
+}
+
 static sz response_content_length(const sw_test_response* response) {
     const char* header = strstr(response->data, "Content-Length:");
     assert(header != NULL);
@@ -783,10 +943,12 @@ static void assert_complete_response(const sw_test_response* response) {
 }
 
 static void test_live_server(void) {
-    sw_mgr* mgr = sw_mgr_create();
+    sw_mgr* mgr = sw_mgr_create(NULL);
     sw_test_server_state state;
     char file_name[256];
+    char docroot_path[512];
     char file_path[512];
+    char request_buffer[1024];
     FILE* file;
     u16 port;
     sw_test_response response;
@@ -794,23 +956,17 @@ static void test_live_server(void) {
 
     assert(mgr != NULL);
 
+    create_temp_directory(docroot_path, sizeof(docroot_path), "assets");
+
     assert(sw_generate_unique_filename("fixture.txt", file_name, sizeof(file_name)));
-#ifdef _WIN32
-    {
-        DWORD temp_dir_len = GetTempPathA((DWORD)sizeof(file_path), file_path);
-        assert(temp_dir_len > 0);
-        assert(temp_dir_len < sizeof(file_path));
-        assert(snprintf(file_path + temp_dir_len, sizeof(file_path) - (sz)temp_dir_len, "%s", file_name) > 0);
-    }
-#else
-    assert(snprintf(file_path, sizeof(file_path), "/tmp/%s", file_name) > 0);
-#endif
+    assert(snprintf(file_path, sizeof(file_path), "%s/%s", docroot_path, file_name) > 0);
     file = fopen(file_path, "wb");
     assert(file != NULL);
-    fputs("static payload", file);
+    fputs("public payload", file);
     fclose(file);
 
     state.file_path = file_path;
+    state.docroot = docroot_path;
     state.request_count = 0;
 
     listen_rc = sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state);
@@ -872,11 +1028,120 @@ static void test_live_server(void) {
 
     response = issue_request(mgr, port, "GET /file HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert_complete_response(&response);
-    assert(strstr(response.data, "static payload") != NULL);
+    assert(strstr(response.data, "public payload") != NULL);
     free(response.data);
 
-    assert(state.request_count == 7);
+    assert(snprintf(request_buffer, sizeof(request_buffer),
+        "GET /public/%s HTTP/1.1\r\nHost: localhost\r\n\r\n", file_name) > 0);
+    response = issue_request_bytes(mgr, port, request_buffer, strlen(request_buffer));
+    assert_complete_response(&response);
+    assert(strstr(response.data, "public payload") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /public/%2e%2e/fixture.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 403 Forbidden") != NULL);
+    free(response.data);
+
+    assert(state.request_count == 9);
     remove(file_path);
+#ifdef _WIN32
+    RemoveDirectoryA(docroot_path);
+#else
+    rmdir(docroot_path);
+#endif
+    sw_mgr_destroy(mgr);
+}
+
+static void test_server_config(void) {
+    sw_http_config config = sw_http_config_default();
+    sw_mgr* mgr;
+    sw_test_server_state state = {0};
+    u16 port;
+    sw_test_response response;
+    sw_test_socket fd;
+
+    config.max_header_bytes = 96;
+    config.max_body_bytes = 16;
+    config.max_header_count = 2;
+    config.header_timeout_ms = 30;
+    config.body_timeout_ms = 30;
+    config.idle_timeout_ms = 30;
+
+    mgr = sw_mgr_create(&config);
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    response = issue_request(mgr, port,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 18446744073709551615\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 413 Payload Too Large") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "GET / HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "X-One: 1\r\n"
+        "X-Two: 2\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 431 Request Header Fields Too Large") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 20\r\n"
+        "\r\n"
+        "12345678901234567890");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 413 Payload Too Large") != NULL);
+    free(response.data);
+
+    fd = connect_to_port(port);
+    assert(send(fd, "GET / HTTP/1.1\r\n", (int)strlen("GET / HTTP/1.1\r\n"), 0) == (int)strlen("GET / HTTP/1.1\r\n"));
+    response = read_response_from_socket(mgr, fd, 40, 5, 5);
+    assert(strstr(response.data, "HTTP/1.1 408 Request Timeout") != NULL);
+    free(response.data);
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+
+    fd = connect_to_port(port);
+    assert(send(fd,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 10\r\n"
+        "\r\n"
+        "12",
+        (int)strlen(
+            "POST /form HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Length: 10\r\n"
+            "\r\n"
+            "12"),
+        0) == (int)strlen(
+            "POST /form HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Length: 10\r\n"
+            "\r\n"
+            "12"));
+    response = read_response_from_socket(mgr, fd, 40, 5, 5);
+    assert(strstr(response.data, "HTTP/1.1 408 Request Timeout") != NULL);
+    free(response.data);
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+
     sw_mgr_destroy(mgr);
 }
 
@@ -895,7 +1160,8 @@ static const sw_named_test sw_named_tests[] = {
     { "public_short_names", test_public_short_names },
     { "request_helpers", test_request_helpers },
     { "utility_helpers", test_utility_helpers },
-    { "live_server", test_live_server }
+    { "live_server", test_live_server },
+    { "server_config", test_server_config }
 };
 
 static int run_named_test(const char* name) {

@@ -2,6 +2,9 @@
 #define SW_INTERNAL_H
 
 #ifndef _WIN32
+#    ifndef _XOPEN_SOURCE
+#        define _XOPEN_SOURCE 700
+#    endif
 #    ifndef _POSIX_C_SOURCE
 #        define _POSIX_C_SOURCE 200809L
 #    endif
@@ -103,9 +106,13 @@ struct sw_connection {
     sw_http_header_array header_storage;
     sw_http_message request;
     b8 request_ready;
+    b8 headers_complete;
     b8 close_after_write;
     FILE* file_stream;
     sz file_remaining;
+    f64 opened_at_ms;
+    f64 phase_started_at_ms;
+    f64 last_activity_at_ms;
     c8 remote_ip[64];
     u16 remote_port;
 };
@@ -114,6 +121,7 @@ struct sw_mgr {
     sw_listener_array listeners;
     sw_connection_array connections;
     b8 stop_requested;
+    sw_http_config config;
     sw_backend* backend;
 };
 

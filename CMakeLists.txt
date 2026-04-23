@@ -154,6 +154,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
     add_test(NAME syphax_web_tests_utility_helpers COMMAND syphax_web_tests utility_helpers)
     add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
+    add_test(NAME syphax_web_tests_server_config COMMAND syphax_web_tests server_config)
 endif()
 
 install(TARGETS syphax_web

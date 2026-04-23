@@ -23,6 +23,7 @@ static const sw_example_feature sw_example_features[] = {
 };
 
 static void resource_path(c8* buffer, sz buffer_len, const c8* relative_path);
+static void resource_root(c8* buffer, sz buffer_len);
 static sw_translator* create_translator(void);
 static const sw_language* find_language(const sw_translator* translator, const c8* code);
 static const sw_language* select_language(sw_translator* translator, const c8* requested);
@@ -34,6 +35,10 @@ static void render_language_switcher(sw_buffer* h, const sw_translator* translat
 
 static void resource_path(c8* buffer, sz buffer_len, const c8* relative_path) {
     (void)snprintf(buffer, buffer_len, "%s/%s", SYPHAX_WEB_SOURCE_DIR, relative_path);
+}
+
+static void resource_root(c8* buffer, sz buffer_len) {
+    resource_path(buffer, buffer_len, "resources");
 }
 
 static sw_translator* create_translator(void) {
@@ -95,11 +100,11 @@ static sw_language_direction preview_result_direction(const sw_language* current
     return current_language->direction;
 }
 
-static void render_stylesheet(sw_connection* connection) {
-    char path[1024];
+static void render_stylesheet(sw_connection* connection, const c8* request_path) {
+    char root[1024];
 
-    resource_path(path, sizeof(path), "resources/style.css");
-    (void)sw_http_serve_file(connection, path);
+    resource_root(root, sizeof(root));
+    (void)sw_http_serve_path(connection, root, request_path);
 }
 
 static void render_feature(sw_buffer* h, const sw_example_feature* feature) {
@@ -376,7 +381,7 @@ static void render_root(
                 (void)sw_js_live_search(h, "sw-search-form", "sw-search-query", "sw-search-preview", "/search-preview");
                 render_feature_catalog(h);
                 sw_p(h, sw_no_attrs, {
-                    sw_text(h, "Static assets are served from the resources directory through the same library API.");
+                    sw_text(h, "Static assets are served through a docroot-scoped helper so the example never joins public paths manually.");
                 });
             });
         });
@@ -401,7 +406,7 @@ static void http_handler(sw_connection* connection, const sw_http_message* reque
         return;
     }
     if (sw_http_is(request, "GET", "/style.css")) {
-        render_stylesheet(connection);
+        render_stylesheet(connection, request->uri);
         return;
     }
     if (sw_http_is(request, "GET", "/search-preview")) {
@@ -415,10 +420,12 @@ static void http_handler(sw_connection* connection, const sw_http_message* reque
 
 int main(void) {
     sw_translator* translator = create_translator();
+    sw_http_config config = sw_http_config_default();
 
     printf("Listening on 0.0.0.0:8000\n");
     printf("Open http://127.0.0.1:8000 in your browser\n");
-    i32 rc = sw_server_listen("http://0.0.0.0:8000", http_handler, translator);
+    config.max_body_bytes = 256 * 1024;
+    i32 rc = sw_server_listen("http://0.0.0.0:8000", &config, http_handler, translator);
     sw_translator_destroy(translator);
     return rc;
 }

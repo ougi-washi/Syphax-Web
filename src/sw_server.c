@@ -1,7 +1,9 @@
 #include "sw_backend.h"
+#include "sw_utility.h"
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,11 +17,43 @@ typedef enum {
     SW_PARSE_PENDING = 0,
     SW_PARSE_READY = 1,
     SW_PARSE_BAD_REQUEST = -1,
-    SW_PARSE_UNSUPPORTED_CHUNKED = -2
+    SW_PARSE_UNSUPPORTED_CHUNKED = -2,
+    SW_PARSE_HEADERS_TOO_LARGE = -3,
+    SW_PARSE_PAYLOAD_TOO_LARGE = -4,
+    SW_PARSE_TOO_MANY_HEADERS = -5
 } sw_parse_result;
 
 static sz sw_socket_runtime_users = 0;
 static sw_mgr* sw_signal_mgr = NULL;
+
+static sz sw_http_config_max_request_bytes(const sw_http_config* config);
+static void sw_http_header_array_free_owned(sw_http_header_array* headers);
+static b8 sw_parse_content_length_value(const c8* value, sz value_len, sz* out_length);
+static b8 sw_ascii_case_equal_range(const c8* lhs, const c8* rhs, sz len);
+static sz sw_find_bytes_from(const c8* data, sz data_len, sz offset, const c8* needle, sz needle_len);
+static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset);
+static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms);
+static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
+static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
+static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
+static b8 sw_path_join(char* out, sz out_cap, const c8* lhs, const c8* rhs);
+static b8 sw_path_real(const c8* path, char* out, sz out_cap);
+static b8 sw_path_has_prefix(const c8* path, const c8* prefix);
+static b8 sw_decode_request_path(const c8* request_path, char* out, sz out_cap);
+static sz sw_http_path_length(const c8* uri);
+static int sw_hex_value(c8 ch);
+static b8 sw_http_content_type_boundary(const c8* content_type, char* boundary, sz boundary_cap);
+static const c8* sw_find_multipart_boundary(
+    const c8* data,
+    sz data_len,
+    sz offset,
+    const c8* boundary_marker,
+    sz boundary_marker_len,
+    b8 require_crlf_prefix
+);
+static b8 sw_header_value_matches_name(const c8* line, sz line_len, const c8* name);
+static c8* sw_parse_disposition_param(const c8* line, sz line_len, const c8* key);
+static c8* sw_strdup_trimmed_range(const c8* text, sz text_len);
 
 #ifdef _WIN32
 static BOOL WINAPI sw_console_handler(DWORD signal_type) {
@@ -116,12 +150,14 @@ const c8* sw_http_status_text(i32 status_code) {
         case 301: return "Moved Permanently";
         case 302: return "Found";
         case 400: return "Bad Request";
+        case 408: return "Request Timeout";
         case 401: return "Unauthorized";
         case 403: return "Forbidden";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 411: return "Length Required";
         case 413: return "Payload Too Large";
+        case 431: return "Request Header Fields Too Large";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 503: return "Service Unavailable";
@@ -143,6 +179,98 @@ static sz sw_find_bytes(const c8* data, sz data_len, const c8* needle, sz needle
     }
 
     return SIZE_MAX;
+}
+
+static sz sw_find_bytes_from(const c8* data, sz data_len, sz offset, const c8* needle, sz needle_len) {
+    const sz rel = (offset <= data_len) ? sw_find_bytes(data + offset, data_len - offset, needle, needle_len) : SIZE_MAX;
+    return rel == SIZE_MAX ? SIZE_MAX : offset + rel;
+}
+
+static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset) {
+    return sw_find_bytes_from(data, data_len, offset, "\r\n", 2);
+}
+
+static sz sw_http_config_max_request_bytes(const sw_http_config* config) {
+    sz total = 4;
+
+    if (config == NULL) {
+        return SIZE_MAX;
+    }
+    if (config->max_header_bytes > SIZE_MAX - total) {
+        return SIZE_MAX;
+    }
+    total += config->max_header_bytes;
+    if (config->max_body_bytes > SIZE_MAX - total) {
+        return SIZE_MAX;
+    }
+    return total + config->max_body_bytes;
+}
+
+static void sw_http_header_array_free_owned(sw_http_header_array* headers) {
+    sz i;
+    sw_http_header* data;
+
+    if (headers == NULL) {
+        return;
+    }
+
+    data = s_array_get_data(headers);
+    for (i = 0; i < s_array_get_size(headers); ++i) {
+        free((void*)data[i].name);
+        free((void*)data[i].value);
+    }
+    s_array_clear(headers);
+}
+
+static b8 sw_parse_content_length_value(const c8* value, sz value_len, sz* out_length) {
+    sz length = 0;
+    sz i = 0;
+    sz end = value_len;
+
+    if (out_length != NULL) {
+        *out_length = 0;
+    }
+    if (value == NULL || out_length == NULL) {
+        return 0;
+    }
+
+    while (i < value_len && isspace((unsigned char)value[i])) {
+        ++i;
+    }
+    while (end > i && isspace((unsigned char)value[end - 1])) {
+        --end;
+    }
+    if (i == end) {
+        return 0;
+    }
+
+    for (; i < end; ++i) {
+        const unsigned char ch = (unsigned char)value[i];
+        if (ch < '0' || ch > '9') {
+            return 0;
+        }
+        if (length > (SIZE_MAX - (sz)(ch - '0')) / 10) {
+            return 0;
+        }
+        length = (length * 10) + (sz)(ch - '0');
+    }
+
+    *out_length = length;
+    return 1;
+}
+
+static b8 sw_ascii_case_equal_range(const c8* lhs, const c8* rhs, sz len) {
+    sz i;
+
+    if (lhs == NULL || rhs == NULL) {
+        return 0;
+    }
+    for (i = 0; i < len; ++i) {
+        if (tolower((unsigned char)lhs[i]) != tolower((unsigned char)rhs[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static b8 sw_parse_listen_url(const c8* url, c8* host, sz host_cap, c8* port, sz port_cap) {
@@ -270,6 +398,7 @@ static sw_socket sw_create_listener_socket(const c8* host, const c8* port, u16* 
 static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, sw_socket fd, const c8* remote_ip, u16 remote_port) {
     sw_connection* connection = (sw_connection*)calloc(1, sizeof(*connection));
     s_handle handle;
+    const f64 now_ms = sw_get_time();
 
     if (connection == NULL) {
         return NULL;
@@ -282,6 +411,9 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
     connection->handler = listener->handler;
     connection->handler_user_data = listener->handler_user_data;
     connection->remote_port = remote_port;
+    connection->opened_at_ms = now_ms;
+    connection->phase_started_at_ms = now_ms;
+    connection->last_activity_at_ms = now_ms;
     if (remote_ip != NULL) {
         snprintf(connection->remote_ip, sizeof(connection->remote_ip), "%s", remote_ip);
     }
@@ -326,6 +458,14 @@ void sw_connection_reset_request(sw_connection* connection) {
     s_array_clear(&connection->header_storage);
     memset(&connection->request, 0, sizeof(connection->request));
     connection->request_ready = 0;
+    connection->headers_complete = 0;
+    connection->phase_started_at_ms = sw_get_time();
+}
+
+static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms) {
+    if (connection != NULL) {
+        connection->last_activity_at_ms = now_ms;
+    }
 }
 
 void sw_mgr_close_connection(sw_mgr* mgr, sw_connection* connection) {
@@ -369,51 +509,71 @@ b8 sw_connection_has_pending_output(const sw_connection* connection) {
 }
 
 static sw_parse_result sw_connection_try_parse_request(sw_connection* connection) {
-    const c8* data = sw_char_array_data(&connection->read_buffer);
+    const sw_http_config* config;
+    const c8* data;
     const sz data_len = sw_char_array_size(&connection->read_buffer);
-    const sz header_end = sw_find_bytes(data, data_len, "\r\n\r\n", 4);
-    const c8* first_line_end;
-    const c8* cursor;
+    const sz header_end = sw_find_bytes(sw_char_array_data(&connection->read_buffer), data_len, "\r\n\r\n", 4);
+    sz first_line_end;
+    sz cursor;
     sw_http_header_array parsed_headers;
     sw_http_message parsed_request;
+    b8 saw_content_length = 0;
 
     if (connection->request_ready) {
         return SW_PARSE_READY;
     }
-
-    if (header_end == SIZE_MAX) {
-        return SW_PARSE_PENDING;
+    if (connection->mgr == NULL) {
+        return SW_PARSE_BAD_REQUEST;
     }
 
-    first_line_end = strstr(data, "\r\n");
-    if (first_line_end == NULL) {
+    config = &connection->mgr->config;
+    data = sw_char_array_data(&connection->read_buffer);
+
+    if (header_end == SIZE_MAX) {
+        if (data_len > config->max_header_bytes) {
+            return SW_PARSE_HEADERS_TOO_LARGE;
+        }
         return SW_PARSE_PENDING;
+    }
+    if (header_end + 4 > config->max_header_bytes) {
+        return SW_PARSE_HEADERS_TOO_LARGE;
+    }
+    if (!connection->headers_complete) {
+        connection->headers_complete = 1;
+        connection->phase_started_at_ms = sw_get_time();
+    }
+
+    first_line_end = sw_find_crlf_from(data, header_end, 0);
+    if (first_line_end == SIZE_MAX || first_line_end > header_end) {
+        return SW_PARSE_BAD_REQUEST;
     }
 
     memset(&parsed_request, 0, sizeof(parsed_request));
     s_array_init(&parsed_headers);
 
     {
-        const c8* first_space = memchr(data, ' ', (sz)(first_line_end - data));
+        const c8* first_space = memchr(data, ' ', first_line_end);
         const c8* second_space = NULL;
 
         if (first_space != NULL) {
-            second_space = memchr(first_space + 1, ' ', (sz)(first_line_end - (first_space + 1)));
+            second_space = memchr(first_space + 1, ' ', first_line_end - (sz)(first_space + 1 - data));
         }
 
         if (first_space == NULL || second_space == NULL) {
-            s_array_clear(&parsed_headers);
-            return SW_PARSE_BAD_REQUEST;
+            goto bad_request;
         }
 
         parsed_request.method = sw_strdup_range(data, (sz)(first_space - data));
         parsed_request.uri = sw_strdup_range(first_space + 1, (sz)(second_space - first_space - 1));
-        parsed_request.proto = sw_strdup_range(second_space + 1, (sz)(first_line_end - second_space - 1));
+        parsed_request.proto = sw_strdup_range(second_space + 1, (sz)(data + first_line_end - second_space - 1));
+        if (parsed_request.method == NULL || parsed_request.uri == NULL || parsed_request.proto == NULL) {
+            goto bad_request;
+        }
     }
 
     cursor = first_line_end + 2;
-    while ((sz)(cursor - data) < header_end) {
-        const c8* line_end = strstr(cursor, "\r\n");
+    while (cursor < header_end) {
+        const sz line_end = sw_find_crlf_from(data, header_end + 2, cursor);
         const c8* colon;
         const c8* name_end;
         const c8* value_begin;
@@ -422,45 +582,63 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
         char* name;
         char* value;
 
-        if (line_end == NULL || line_end > data + header_end) {
+        if (line_end == SIZE_MAX || line_end > header_end) {
             break;
         }
         if (cursor == line_end) {
             break;
         }
 
-        colon = memchr(cursor, ':', (sz)(line_end - cursor));
+        if (s_array_get_size(&parsed_headers) + 1 > config->max_header_count) {
+            goto too_many_headers;
+        }
+
+        colon = memchr(data + cursor, ':', line_end - cursor);
         if (colon == NULL) {
-            sw_connection_reset_request(connection);
-            s_array_clear(&parsed_headers);
-            free((void*)parsed_request.method);
-            free((void*)parsed_request.uri);
-            free((void*)parsed_request.proto);
-            return SW_PARSE_BAD_REQUEST;
+            goto bad_request;
         }
 
         name_end = colon;
-        while (name_end > cursor && isspace((unsigned char)name_end[-1])) {
+        while (name_end > data + cursor && isspace((unsigned char)name_end[-1])) {
             --name_end;
+        }
+        if (name_end == data + cursor) {
+            goto bad_request;
         }
 
         value_begin = colon + 1;
-        while (value_begin < line_end && isspace((unsigned char)*value_begin)) {
+        while (value_begin < data + line_end && isspace((unsigned char)*value_begin)) {
             ++value_begin;
         }
-        value_end = line_end;
+        value_end = data + line_end;
         while (value_end > value_begin && isspace((unsigned char)value_end[-1])) {
             --value_end;
         }
 
-        name = sw_strdup_range(cursor, (sz)(name_end - cursor));
+        name = sw_strdup_range(data + cursor, (sz)(name_end - (data + cursor)));
         value = sw_strdup_range(value_begin, (sz)(value_end - value_begin));
+        if (name == NULL || value == NULL) {
+            free(name);
+            free(value);
+            goto bad_request;
+        }
         header.name = name;
         header.value = value;
         s_array_add(&parsed_headers, header);
 
         if (sw_stricmp_ascii(name, "Content-Length") == 0) {
-            parsed_request.content_length = (sz)strtoull(value, NULL, 10);
+            sz content_length;
+            if (!sw_parse_content_length_value(value, strlen(value), &content_length)) {
+                goto bad_request;
+            }
+            if (saw_content_length && parsed_request.content_length != content_length) {
+                goto bad_request;
+            }
+            parsed_request.content_length = content_length;
+            saw_content_length = 1;
+            if (parsed_request.content_length > config->max_body_bytes) {
+                goto payload_too_large;
+            }
         } else if (sw_stricmp_ascii(name, "Transfer-Encoding") == 0) {
             if (sw_strcasestr_ascii(value, "chunked") != NULL) {
                 parsed_request.is_chunked = 1;
@@ -471,32 +649,22 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
     }
 
     if (parsed_request.is_chunked) {
-        sz i;
-        free((void*)parsed_request.method);
-        free((void*)parsed_request.uri);
-        free((void*)parsed_request.proto);
-        for (i = 0; i < s_array_get_size(&parsed_headers); ++i) {
-            free((void*)s_array_get_data(&parsed_headers)[i].name);
-            free((void*)s_array_get_data(&parsed_headers)[i].value);
-        }
-        s_array_clear(&parsed_headers);
-        return SW_PARSE_UNSUPPORTED_CHUNKED;
+        goto unsupported_chunked;
     }
-
+    if (parsed_request.content_length > config->max_body_bytes) {
+        goto payload_too_large;
+    }
+    if (parsed_request.content_length > SIZE_MAX - (header_end + 4)) {
+        goto bad_request;
+    }
     if (data_len < header_end + 4 + parsed_request.content_length) {
-        sz i;
-        free((void*)parsed_request.method);
-        free((void*)parsed_request.uri);
-        free((void*)parsed_request.proto);
-        for (i = 0; i < s_array_get_size(&parsed_headers); ++i) {
-            free((void*)s_array_get_data(&parsed_headers)[i].name);
-            free((void*)s_array_get_data(&parsed_headers)[i].value);
-        }
-        s_array_clear(&parsed_headers);
-        return SW_PARSE_PENDING;
+        goto pending;
     }
 
     parsed_request.body = sw_strdup_range(data + header_end + 4, parsed_request.content_length);
+    if (parsed_request.content_length > 0 && parsed_request.body == NULL) {
+        goto bad_request;
+    }
     parsed_request.body_len = parsed_request.content_length;
     parsed_request.headers = s_array_get_data(&parsed_headers);
     parsed_request.num_headers = s_array_get_size(&parsed_headers);
@@ -505,6 +673,41 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
     connection->request = parsed_request;
     connection->request_ready = 1;
     return SW_PARSE_READY;
+
+pending:
+    free((void*)parsed_request.method);
+    free((void*)parsed_request.uri);
+    free((void*)parsed_request.proto);
+    sw_http_header_array_free_owned(&parsed_headers);
+    return SW_PARSE_PENDING;
+
+unsupported_chunked:
+    free((void*)parsed_request.method);
+    free((void*)parsed_request.uri);
+    free((void*)parsed_request.proto);
+    sw_http_header_array_free_owned(&parsed_headers);
+    return SW_PARSE_UNSUPPORTED_CHUNKED;
+
+too_many_headers:
+    free((void*)parsed_request.method);
+    free((void*)parsed_request.uri);
+    free((void*)parsed_request.proto);
+    sw_http_header_array_free_owned(&parsed_headers);
+    return SW_PARSE_TOO_MANY_HEADERS;
+
+payload_too_large:
+    free((void*)parsed_request.method);
+    free((void*)parsed_request.uri);
+    free((void*)parsed_request.proto);
+    sw_http_header_array_free_owned(&parsed_headers);
+    return SW_PARSE_PAYLOAD_TOO_LARGE;
+
+bad_request:
+    free((void*)parsed_request.method);
+    free((void*)parsed_request.uri);
+    free((void*)parsed_request.proto);
+    sw_http_header_array_free_owned(&parsed_headers);
+    return SW_PARSE_BAD_REQUEST;
 }
 
 static int sw_connection_fill_file_buffer(sw_connection* connection) {
@@ -572,12 +775,18 @@ int sw_mgr_accept_ready(sw_mgr* mgr, sw_listener* listener) {
 int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
     c8 chunk[4096];
     b8 read_any = 0;
+    const sz max_request_bytes = sw_http_config_max_request_bytes(&mgr->config);
 
     for (;;) {
         int read_bytes = (int)recv(connection->fd, chunk, sizeof(chunk), 0);
         if (read_bytes > 0) {
             read_any = 1;
             sw_char_array_append_bytes(&connection->read_buffer, chunk, (sz)read_bytes);
+            sw_connection_mark_activity(connection, sw_get_time());
+            if (sw_char_array_size(&connection->read_buffer) > max_request_bytes) {
+                sw_http_reply_status_text(connection, 413, "Payload Too Large");
+                return 0;
+            }
             continue;
         }
         if (read_bytes == 0) {
@@ -613,6 +822,13 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
             sw_http_replyf(connection, 501, "text/plain; charset=utf-8", "Chunked requests are not supported");
             sw_mgr_sync_connection(mgr, connection);
             return 0;
+        case SW_PARSE_HEADERS_TOO_LARGE:
+        case SW_PARSE_TOO_MANY_HEADERS:
+            sw_http_reply_status_text(connection, 431, "Request Header Fields Too Large");
+            return 0;
+        case SW_PARSE_PAYLOAD_TOO_LARGE:
+            sw_http_reply_status_text(connection, 413, "Payload Too Large");
+            return 0;
         case SW_PARSE_BAD_REQUEST:
         default:
             sw_http_replyf(connection, 400, "text/plain; charset=utf-8", "Bad Request");
@@ -629,6 +845,7 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
         const sz data_len = sw_char_array_size(&connection->write_buffer);
         int sent_bytes = (int)send(connection->fd, data, (int)data_len, 0);
         if (sent_bytes > 0) {
+            sw_connection_mark_activity(connection, sw_get_time());
             sw_char_array_consume_prefix(&connection->write_buffer, (sz)sent_bytes);
             if (sw_char_array_size(&connection->write_buffer) == 0) {
                 sw_connection_fill_file_buffer(connection);
@@ -660,8 +877,21 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
     return 0;
 }
 
-sw_mgr* sw_mgr_create(void) {
+sw_http_config sw_http_config_default(void) {
+    const sw_http_config config = {
+        .max_header_bytes = 16 * 1024,
+        .max_body_bytes = 1024 * 1024,
+        .max_header_count = 64,
+        .idle_timeout_ms = 15 * 1000,
+        .header_timeout_ms = 5 * 1000,
+        .body_timeout_ms = 15 * 1000
+    };
+    return config;
+}
+
+sw_mgr* sw_mgr_create(const sw_http_config* config) {
     sw_mgr* mgr;
+    const sw_http_config defaults = sw_http_config_default();
 
     if (sw_socket_runtime_acquire() != 0) {
         return NULL;
@@ -675,6 +905,27 @@ sw_mgr* sw_mgr_create(void) {
 
     s_array_init(&mgr->listeners);
     s_array_init(&mgr->connections);
+    mgr->config = defaults;
+    if (config != NULL) {
+        if (config->max_header_bytes > 0) {
+            mgr->config.max_header_bytes = config->max_header_bytes;
+        }
+        if (config->max_body_bytes > 0) {
+            mgr->config.max_body_bytes = config->max_body_bytes;
+        }
+        if (config->max_header_count > 0) {
+            mgr->config.max_header_count = config->max_header_count;
+        }
+        if (config->idle_timeout_ms > 0) {
+            mgr->config.idle_timeout_ms = config->idle_timeout_ms;
+        }
+        if (config->header_timeout_ms > 0) {
+            mgr->config.header_timeout_ms = config->header_timeout_ms;
+        }
+        if (config->body_timeout_ms > 0) {
+            mgr->config.body_timeout_ms = config->body_timeout_ms;
+        }
+    }
 
     if (sw_backend_init(mgr) != 0) {
         s_array_clear(&mgr->listeners);
@@ -761,11 +1012,116 @@ i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* us
     return 0;
 }
 
+static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body) {
+    if (connection == NULL) {
+        return -1;
+    }
+    if (sw_http_replyf(connection, status_code, "text/plain; charset=utf-8", "%s", (body != NULL) ? body : "") != 0) {
+        if (connection->mgr != NULL) {
+            sw_mgr_close_connection(connection->mgr, connection);
+        }
+        return -1;
+    }
+    return 0;
+}
+
+static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connection* connection, f64 now_ms) {
+    f64 remaining_ms = -1.0;
+
+    if (mgr == NULL || connection == NULL) {
+        return -1;
+    }
+
+    if (connection->close_after_write && sw_connection_has_pending_output(connection)) {
+        return -1;
+    }
+
+    if (!connection->request_ready) {
+        const i32 phase_timeout_ms = connection->headers_complete ? mgr->config.body_timeout_ms : mgr->config.header_timeout_ms;
+        if (phase_timeout_ms > 0) {
+            remaining_ms = (f64)phase_timeout_ms - (now_ms - connection->phase_started_at_ms);
+        }
+    }
+
+    if (mgr->config.idle_timeout_ms > 0) {
+        const f64 idle_remaining_ms = (f64)mgr->config.idle_timeout_ms - (now_ms - connection->last_activity_at_ms);
+        if (remaining_ms < 0.0 || idle_remaining_ms < remaining_ms) {
+            remaining_ms = idle_remaining_ms;
+        }
+    }
+
+    if (remaining_ms < 0.0) {
+        return -1;
+    }
+    if (remaining_ms <= 0.0) {
+        return 0;
+    }
+    if (remaining_ms > (f64)INT_MAX) {
+        return INT_MAX;
+    }
+    return (i32)remaining_ms;
+}
+
+static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms) {
+    i32 effective_timeout_ms = timeout_ms;
+    const f64 now_ms = sw_get_time();
+    sw_connection* const* connections;
+    sz i;
+
+    if (mgr == NULL) {
+        return timeout_ms;
+    }
+    connections = (sw_connection* const*)s_array_get_data((sw_connection_array*)&mgr->connections);
+
+    for (i = 0; i < s_array_get_size(&mgr->connections); ++i) {
+        sw_connection* connection = connections[i];
+        const i32 remaining_ms = sw_connection_remaining_timeout_ms(mgr, connection, now_ms);
+        if (remaining_ms < 0) {
+            continue;
+        }
+        if (effective_timeout_ms < 0 || remaining_ms < effective_timeout_ms) {
+            effective_timeout_ms = remaining_ms;
+        }
+    }
+
+    return effective_timeout_ms;
+}
+
+static void sw_mgr_enforce_timeouts(sw_mgr* mgr) {
+    const f64 now_ms = sw_get_time();
+    sz i = 0;
+
+    if (mgr == NULL) {
+        return;
+    }
+
+    while (i < s_array_get_size(&mgr->connections)) {
+        sw_connection* connection = s_array_get_data(&mgr->connections)[i];
+        const i32 remaining_ms = sw_connection_remaining_timeout_ms(mgr, connection, now_ms);
+
+        if (remaining_ms == 0) {
+            if (sw_http_reply_status_text(connection, 408, "Request Timeout") != 0) {
+                continue;
+            }
+        }
+        ++i;
+    }
+}
+
 i32 sw_mgr_poll(sw_mgr* mgr, i32 timeout_ms) {
+    int rc;
+
     if (mgr == NULL || mgr->stop_requested) {
         return 0;
     }
-    return sw_backend_poll(mgr, timeout_ms);
+    sw_mgr_enforce_timeouts(mgr);
+    timeout_ms = sw_mgr_effective_poll_timeout(mgr, timeout_ms);
+    rc = sw_backend_poll(mgr, timeout_ms);
+    if (rc < 0) {
+        return -1;
+    }
+    sw_mgr_enforce_timeouts(mgr);
+    return rc;
 }
 
 void sw_mgr_request_stop(sw_mgr* mgr) {
@@ -787,8 +1143,8 @@ u16 sw_mgr_get_listener_port(const sw_mgr* mgr, sz listener_index) {
     return listeners[listener_index]->bound_port;
 }
 
-i32 sw_server_listen(const c8* url, sw_http_handler handler, void* user_data) {
-    sw_mgr* mgr = sw_mgr_create();
+i32 sw_server_listen(const c8* url, const sw_http_config* config, sw_http_handler handler, void* user_data) {
+    sw_mgr* mgr = sw_mgr_create(config);
     int rc;
 
     if (mgr == NULL) {
@@ -860,6 +1216,7 @@ i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_
     if (body_len > 0 && !sw_char_array_append_bytes(&connection->write_buffer, body, body_len)) {
         return -1;
     }
+    sw_connection_mark_activity(connection, sw_get_time());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -889,6 +1246,7 @@ i32 sw_http_write(sw_connection* connection, const void* data, sz data_len) {
     if (!sw_char_array_append_bytes(&connection->write_buffer, data, data_len)) {
         return -1;
     }
+    sw_connection_mark_activity(connection, sw_get_time());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -907,7 +1265,159 @@ i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...) {
     if (!ok) {
         return -1;
     }
+    sw_connection_mark_activity(connection, sw_get_time());
     return sw_mgr_sync_connection(connection->mgr, connection);
+}
+
+static b8 sw_path_is_separator(c8 ch) {
+    return ch == '/' || ch == '\\';
+}
+
+static b8 sw_path_join(char* out, sz out_cap, const c8* lhs, const c8* rhs) {
+    const sz lhs_len = lhs != NULL ? strlen(lhs) : 0;
+    const b8 need_sep = lhs_len > 0 && !sw_path_is_separator(lhs[lhs_len - 1]);
+    const int written = snprintf(out, out_cap, "%s%s%s", lhs != NULL ? lhs : "", need_sep ? "/" : "", rhs != NULL ? rhs : "");
+    return written >= 0 && (sz)written < out_cap;
+}
+
+static b8 sw_path_real(const c8* path, char* out, sz out_cap) {
+#ifdef _WIN32
+    DWORD written;
+
+    if (path == NULL || out == NULL || out_cap == 0) {
+        return 0;
+    }
+    written = GetFullPathNameA(path, (DWORD)out_cap, out, NULL);
+    return written > 0 && (sz)written < out_cap;
+#else
+    char* resolved;
+    sz resolved_len;
+
+    if (path == NULL || out == NULL || out_cap == 0) {
+        return 0;
+    }
+    resolved = realpath(path, NULL);
+    if (resolved == NULL) {
+        return 0;
+    }
+    resolved_len = strlen(resolved);
+    if (resolved_len >= out_cap) {
+        free(resolved);
+        return 0;
+    }
+    memcpy(out, resolved, resolved_len + 1);
+    free(resolved);
+    return 1;
+#endif
+}
+
+static b8 sw_path_has_prefix(const c8* path, const c8* prefix) {
+    sz i;
+    const sz prefix_len = prefix != NULL ? strlen(prefix) : 0;
+
+    if (path == NULL || prefix == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < prefix_len; ++i) {
+#ifdef _WIN32
+        if (tolower((unsigned char)path[i]) != tolower((unsigned char)prefix[i])) {
+#else
+        if (path[i] != prefix[i]) {
+#endif
+            return 0;
+        }
+    }
+
+    if (path[prefix_len] == '\0') {
+        return 1;
+    }
+    if (prefix_len > 0 && sw_path_is_separator(prefix[prefix_len - 1])) {
+        return 1;
+    }
+    return sw_path_is_separator(path[prefix_len]);
+}
+
+static b8 sw_decode_request_path(const c8* request_path, char* out, sz out_cap) {
+    sw_char_array decoded;
+    const c8* data;
+    sz path_len;
+    sz i = 0;
+    sz out_len = 0;
+
+    if (request_path == NULL || out == NULL || out_cap == 0) {
+        return 0;
+    }
+
+    path_len = sw_http_path_length(request_path);
+    s_array_init(&decoded);
+    while (i < path_len) {
+        c8 ch = request_path[i];
+
+        if (ch == '%') {
+            const int hi = (i + 1 < path_len) ? sw_hex_value(request_path[i + 1]) : -1;
+            const int lo = (i + 2 < path_len) ? sw_hex_value(request_path[i + 2]) : -1;
+            if (hi < 0 || lo < 0) {
+                sw_char_array_free(&decoded);
+                return 0;
+            }
+            ch = (c8)((hi << 4) | lo);
+            i += 3;
+        } else {
+            i += 1;
+        }
+
+        if (ch == '\0') {
+            sw_char_array_free(&decoded);
+            return 0;
+        }
+        sw_char_array_append_byte(&decoded, ch);
+    }
+
+    data = sw_char_array_data(&decoded);
+    i = 0;
+    while (i < sw_char_array_size(&decoded)) {
+        sz segment_begin;
+        sz segment_end;
+        sz segment_len;
+
+        while (i < sw_char_array_size(&decoded) && sw_path_is_separator(data[i])) {
+            ++i;
+        }
+        segment_begin = i;
+        while (i < sw_char_array_size(&decoded) && !sw_path_is_separator(data[i])) {
+            ++i;
+        }
+        segment_end = i;
+        segment_len = segment_end - segment_begin;
+        if (segment_len == 0) {
+            continue;
+        }
+        if (segment_len == 1 && data[segment_begin] == '.') {
+            continue;
+        }
+        if (segment_len == 2 && data[segment_begin] == '.' && data[segment_begin + 1] == '.') {
+            sw_char_array_free(&decoded);
+            return 0;
+        }
+        if (out_len != 0) {
+            if (out_len + 1 >= out_cap) {
+                sw_char_array_free(&decoded);
+                return 0;
+            }
+            out[out_len++] = '/';
+        }
+        if (out_len + segment_len >= out_cap) {
+            sw_char_array_free(&decoded);
+            return 0;
+        }
+        memcpy(out + out_len, data + segment_begin, segment_len);
+        out_len += segment_len;
+    }
+
+    out[out_len] = '\0';
+    sw_char_array_free(&decoded);
+    return out_len > 0;
 }
 
 static const c8* sw_guess_content_type(const c8* path) {
@@ -961,7 +1471,39 @@ i32 sw_http_serve_file(sw_connection* connection, const c8* path) {
     connection->file_stream = file;
     connection->file_remaining = (sz)st.st_size;
     sw_connection_fill_file_buffer(connection);
+    sw_connection_mark_activity(connection, sw_get_time());
     return sw_mgr_sync_connection(connection->mgr, connection);
+}
+
+i32 sw_http_serve_path(sw_connection* connection, const c8* docroot, const c8* request_path) {
+    char docroot_real[4096];
+    char relative_path[4096];
+    char joined_path[4096];
+    char target_real[4096];
+    struct stat st;
+
+    if (connection == NULL || docroot == NULL || request_path == NULL) {
+        return -1;
+    }
+    if (!sw_path_real(docroot, docroot_real, sizeof(docroot_real))) {
+        return sw_http_reply_status_text(connection, 500, "Static asset root is not available");
+    }
+    if (!sw_decode_request_path(request_path, relative_path, sizeof(relative_path))) {
+        return sw_http_reply_status_text(connection, 403, "Forbidden");
+    }
+    if (!sw_path_join(joined_path, sizeof(joined_path), docroot_real, relative_path)) {
+        return sw_http_reply_status_text(connection, 404, "File not found");
+    }
+    if (stat(joined_path, &st) != 0) {
+        return sw_http_reply_status_text(connection, 404, "File not found");
+    }
+    if (!sw_path_real(joined_path, target_real, sizeof(target_real))) {
+        return sw_http_reply_status_text(connection, 404, "File not found");
+    }
+    if (!sw_path_has_prefix(target_real, docroot_real)) {
+        return sw_http_reply_status_text(connection, 403, "Forbidden");
+    }
+    return sw_http_serve_file(connection, target_real);
 }
 
 const c8* sw_http_header_get(const sw_http_message* hm, const c8* name) {
@@ -1082,6 +1624,210 @@ static i32 sw_http_decode_var(const c8* source, sz source_len, const c8* name, c
     return missing_value;
 }
 
+static c8* sw_strdup_trimmed_range(const c8* text, sz text_len) {
+    sz begin = 0;
+    sz end = text_len;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    while (begin < text_len && isspace((unsigned char)text[begin])) {
+        ++begin;
+    }
+    while (end > begin && isspace((unsigned char)text[end - 1])) {
+        --end;
+    }
+    return sw_strdup_range(text + begin, end - begin);
+}
+
+static b8 sw_header_value_matches_name(const c8* line, sz line_len, const c8* name) {
+    sz i;
+    const sz name_len = name != NULL ? strlen(name) : 0;
+
+    if (line == NULL || name == NULL || line_len <= name_len) {
+        return 0;
+    }
+    for (i = 0; i < name_len; ++i) {
+        if (tolower((unsigned char)line[i]) != tolower((unsigned char)name[i])) {
+            return 0;
+        }
+    }
+    return line[name_len] == ':';
+}
+
+static c8* sw_parse_disposition_param(const c8* line, sz line_len, const c8* key) {
+    const c8* cursor;
+    const c8* end;
+    const sz key_len = key != NULL ? strlen(key) : 0;
+
+    if (line == NULL || key == NULL || key_len == 0) {
+        return NULL;
+    }
+
+    cursor = memchr(line, ':', line_len);
+    if (cursor == NULL) {
+        return NULL;
+    }
+    cursor += 1;
+    end = line + line_len;
+
+    while (cursor < end) {
+        const c8* key_begin;
+        const c8* key_end;
+        const c8* value_begin;
+        const c8* value_end;
+        b8 key_matches;
+
+        while (cursor < end && (isspace((unsigned char)*cursor) || *cursor == ';')) {
+            ++cursor;
+        }
+        key_begin = cursor;
+        while (cursor < end && *cursor != '=' && *cursor != ';') {
+            ++cursor;
+        }
+        key_end = cursor;
+        while (key_end > key_begin && isspace((unsigned char)key_end[-1])) {
+            --key_end;
+        }
+        if (cursor >= end || *cursor != '=') {
+            while (cursor < end && *cursor != ';') {
+                ++cursor;
+            }
+            continue;
+        }
+        cursor += 1;
+        key_matches = ((sz)(key_end - key_begin) == key_len) && sw_ascii_case_equal_range(key_begin, key, key_len);
+
+        while (cursor < end && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        if (cursor < end && *cursor == '"') {
+            value_begin = ++cursor;
+            while (cursor < end && *cursor != '"') {
+                if (*cursor == '\\' && cursor + 1 < end) {
+                    cursor += 2;
+                    continue;
+                }
+                ++cursor;
+            }
+            value_end = cursor;
+        } else {
+            value_begin = cursor;
+            while (cursor < end && *cursor != ';') {
+                ++cursor;
+            }
+            value_end = cursor;
+        }
+        if (key_matches) {
+            return sw_strdup_trimmed_range(value_begin, (sz)(value_end - value_begin));
+        }
+        while (cursor < end && *cursor != ';') {
+            ++cursor;
+        }
+    }
+
+    return NULL;
+}
+
+static b8 sw_http_content_type_boundary(const c8* content_type, char* boundary, sz boundary_cap) {
+    const c8* cursor;
+    const c8* end;
+
+    if (content_type == NULL || boundary == NULL || boundary_cap == 0) {
+        return 0;
+    }
+
+    cursor = content_type;
+    end = content_type + strlen(content_type);
+    while (cursor < end) {
+        const c8* key_begin;
+        const c8* key_end;
+        const c8* value_begin;
+        const c8* value_end;
+
+        while (cursor < end && (isspace((unsigned char)*cursor) || *cursor == ';')) {
+            ++cursor;
+        }
+        key_begin = cursor;
+        while (cursor < end && *cursor != '=' && *cursor != ';') {
+            ++cursor;
+        }
+        key_end = cursor;
+        while (key_end > key_begin && isspace((unsigned char)key_end[-1])) {
+            --key_end;
+        }
+        if (cursor >= end || *cursor != '=') {
+            while (cursor < end && *cursor != ';') {
+                ++cursor;
+            }
+            continue;
+        }
+        cursor += 1;
+        while (cursor < end && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        if ((sz)(key_end - key_begin) != 8 || !sw_ascii_case_equal_range(key_begin, "boundary", 8)) {
+            while (cursor < end && *cursor != ';') {
+                if (*cursor == '"' && cursor + 1 < end) {
+                    ++cursor;
+                }
+                ++cursor;
+            }
+            continue;
+        }
+
+        if (cursor < end && *cursor == '"') {
+            value_begin = ++cursor;
+            while (cursor < end && *cursor != '"') {
+                ++cursor;
+            }
+            value_end = cursor;
+        } else {
+            value_begin = cursor;
+            while (cursor < end && *cursor != ';') {
+                ++cursor;
+            }
+            value_end = cursor;
+        }
+
+        if (value_begin == value_end || (sz)(value_end - value_begin) >= boundary_cap) {
+            return 0;
+        }
+        memcpy(boundary, value_begin, (sz)(value_end - value_begin));
+        boundary[value_end - value_begin] = '\0';
+        return 1;
+    }
+
+    return 0;
+}
+
+static const c8* sw_find_multipart_boundary(
+    const c8* data,
+    sz data_len,
+    sz offset,
+    const c8* boundary_marker,
+    sz boundary_marker_len,
+    b8 require_crlf_prefix
+) {
+    sz pos = offset;
+
+    while (pos < data_len) {
+        pos = sw_find_bytes_from(data, data_len, pos, boundary_marker, boundary_marker_len);
+        if (pos == SIZE_MAX) {
+            return NULL;
+        }
+        if (!require_crlf_prefix && pos == offset) {
+            return data + pos;
+        }
+        if (require_crlf_prefix && pos >= 2 && data[pos - 2] == '\r' && data[pos - 1] == '\n') {
+            return data + pos;
+        }
+        pos += 1;
+    }
+
+    return NULL;
+}
+
 b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path) {
     const sz request_path_len = sw_http_path_length((hm != NULL) ? hm->uri : NULL);
     const sz path_len = (path != NULL) ? strlen(path) : 0;
@@ -1141,50 +1887,60 @@ i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_l
 
 i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset) {
     const c8* content_type;
-    const c8* boundary;
-    char boundary_str[256];
-    const c8* part_start;
+    char boundary[256];
+    char boundary_marker[260];
+    char next_boundary_marker[262];
+    const c8* part_boundary;
     const c8* headers_end;
     const c8* body_start;
     const c8* next_boundary;
-    const c8* line;
+    sz line_offset;
+    sz part_offset;
+    sz headers_end_offset;
+    const sz body_len = hm != NULL ? hm->body_len : 0;
 
-    if (hm == NULL || mp == NULL || offset == NULL || hm->body == NULL) {
+    if (hm == NULL || mp == NULL || offset == NULL || hm->body == NULL || *offset > body_len) {
         return 0;
     }
 
     content_type = sw_http_header_get(hm, "Content-Type");
-    if (content_type == NULL) {
+    if (content_type == NULL || !sw_http_content_type_boundary(content_type, boundary, sizeof(boundary))) {
+        return 0;
+    }
+    if (snprintf(boundary_marker, sizeof(boundary_marker), "--%s", boundary) < 0) {
+        return 0;
+    }
+    if (snprintf(next_boundary_marker, sizeof(next_boundary_marker), "\r\n%s", boundary_marker) < 0) {
+        return 0;
+    }
+    part_boundary = sw_find_multipart_boundary(hm->body, body_len, *offset, boundary_marker, strlen(boundary_marker), 0);
+    if (part_boundary == NULL) {
         return 0;
     }
 
-    boundary = strstr(content_type, "boundary=");
-    if (boundary == NULL) {
+    part_offset = (sz)(part_boundary - hm->body) + strlen(boundary_marker);
+    if (part_offset + 2 <= body_len && hm->body[part_offset] == '-' && hm->body[part_offset + 1] == '-') {
         return 0;
     }
-    boundary += 9;
-
-    snprintf(boundary_str, sizeof(boundary_str), "--%s", boundary);
-    part_start = strstr(hm->body + *offset, boundary_str);
-    if (part_start == NULL) {
+    if (part_offset + 2 > body_len || hm->body[part_offset] != '\r' || hm->body[part_offset + 1] != '\n') {
         return 0;
     }
+    part_offset += 2;
 
-    part_start += strlen(boundary_str);
-    if (strncmp(part_start, "--", 2) == 0) {
+    headers_end_offset = sw_find_bytes_from(hm->body, body_len, part_offset, "\r\n\r\n", 4);
+    if (headers_end_offset == SIZE_MAX) {
         return 0;
     }
-    if (strncmp(part_start, "\r\n", 2) == 0) {
-        part_start += 2;
-    }
-
-    headers_end = strstr(part_start, "\r\n\r\n");
-    if (headers_end == NULL) {
-        return 0;
-    }
-
+    headers_end = hm->body + headers_end_offset;
     body_start = headers_end + 4;
-    next_boundary = strstr(body_start, boundary_str);
+    next_boundary = sw_find_multipart_boundary(
+        hm->body,
+        body_len,
+        (sz)(body_start - hm->body),
+        next_boundary_marker + 2,
+        strlen(boundary_marker),
+        1
+    );
     if (next_boundary == NULL) {
         return 0;
     }
@@ -1193,45 +1949,31 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
     mp->boundary = sw_strdup_cstr(boundary);
     mp->data = body_start;
     mp->data_len = (sz)(next_boundary - body_start);
-    if (mp->data_len >= 2 && body_start[mp->data_len - 2] == '\r' && body_start[mp->data_len - 1] == '\n') {
+    if (mp->data_len >= 2 && next_boundary[-2] == '\r' && next_boundary[-1] == '\n') {
         mp->data_len -= 2;
     }
 
-    line = part_start;
-    while (line < headers_end) {
-        const c8* line_end = strstr(line, "\r\n");
-        if (line_end == NULL || line_end > headers_end) {
+    line_offset = part_offset;
+    while (line_offset < (sz)(headers_end - hm->body)) {
+        const sz line_end = sw_find_crlf_from(hm->body, (sz)(headers_end - hm->body) + 2, line_offset);
+        const c8* line = hm->body + line_offset;
+        const sz line_len = (line_end == SIZE_MAX) ? 0 : (line_end - line_offset);
+
+        if (line_end == SIZE_MAX || line_len == 0) {
             break;
         }
 
-        if (strncmp(line, "Content-Disposition:", 20) == 0) {
-            const c8* name = strstr(line, "name=\"");
-            const c8* filename = strstr(line, "filename=\"");
-            if (name != NULL) {
-                const c8* name_end;
-                name += 6;
-                name_end = strchr(name, '"');
-                if (name_end != NULL) {
-                    mp->name = sw_strdup_range(name, (sz)(name_end - name));
-                }
+        if (sw_header_value_matches_name(line, line_len, "Content-Disposition")) {
+            mp->name = sw_parse_disposition_param(line, line_len, "name");
+            mp->filename = sw_parse_disposition_param(line, line_len, "filename");
+        } else if (sw_header_value_matches_name(line, line_len, "Content-Type")) {
+            const c8* colon = memchr(line, ':', line_len);
+            if (colon != NULL) {
+                mp->content_type = sw_strdup_trimmed_range(colon + 1, line_len - (sz)(colon + 1 - line));
             }
-            if (filename != NULL) {
-                const c8* filename_end;
-                filename += 10;
-                filename_end = strchr(filename, '"');
-                if (filename_end != NULL) {
-                    mp->filename = sw_strdup_range(filename, (sz)(filename_end - filename));
-                }
-            }
-        } else if (strncmp(line, "Content-Type:", 13) == 0) {
-            const c8* value = line + 13;
-            while (*value != '\0' && isspace((unsigned char)*value)) {
-                ++value;
-            }
-            mp->content_type = sw_strdup_range(value, (sz)(line_end - value));
         }
 
-        line = line_end + 2;
+        line_offset = line_end + 2;
     }
 
     *offset = (sz)(next_boundary - hm->body);

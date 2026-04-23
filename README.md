@@ -77,17 +77,45 @@ static void handler(sw_connection* c, const sw_http_message* hm, void* user_data
 }
 
 int main(void) {
-    return sw_server_listen("http://0.0.0.0:8000", handler, NULL);
+    sw_http_config config = sw_http_config_default();
+    config.max_body_bytes = 256 * 1024;
+    return sw_server_listen("http://0.0.0.0:8000", &config, handler, NULL);
 }
 ```
 
 Open `http://127.0.0.1:8000`.
 
+## Static Files
+
+Use the docroot-scoped helper for public assets:
+
+```c
+if (sw_http_is(hm, "GET", "/style.css")) {
+    sw_http_serve_path(c, "resources", hm->uri);
+    return;
+}
+```
+
+`sw_http_serve_file` still exists for explicit file paths, but `sw_http_serve_path` is the safer default for request-driven asset serving.
+
+## Server Config
+
+Every manager starts with bounded request and timeout defaults:
+
+- `max_header_bytes = 16 KiB`
+- `max_body_bytes = 1 MiB`
+- `max_header_count = 64`
+- `header_timeout_ms = 5000`
+- `body_timeout_ms = 15000`
+- `idle_timeout_ms = 15000`
+
+Override them by passing a `sw_http_config` to `sw_mgr_create` or `sw_server_listen`. Pass `NULL` to use the defaults as-is.
+
 ## Common Pieces
 
 - HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
 - JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
-- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`
+- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
 - Utility: `sw_matches_query`
 
 ## Translations
@@ -141,10 +169,13 @@ Features in the example:
 - live search
 - language buttons: `en`, `ar`, `fa`, `zh`, `ja`
 - translated HTML
+- bounded request/time config via `sw_http_config_default`
+- docroot-scoped static serving via `sw_http_serve_path`
 - vertical preview text for `zh` and `ja` via `sw_attr(sw_direction(SW_LANGUAGE_DIRECTION_TTB))`
 
-## Limits
+## Scope
 
+- request size and timeout config defaults are enforced, but this is still a small HTTP/1.1 server layer rather than a full edge proxy
 - no TLS
 - no HTTP/2
 - no chunked request decoding
