@@ -1,18 +1,18 @@
 .app-shell{
   display:grid;
-  gap:22px;
+  gap:16px;
 }
 
 .app-form{
   display:grid;
   grid-template-columns:1fr auto;
-  gap:10px;
+  gap:8px;
 }
 
 .task-list{
   display:grid;
   gap:8px;
-  margin:14px 0 0;
+  margin:12px 0 0;
   padding:0;
   list-style:none;
 }
@@ -24,17 +24,33 @@
   justify-content:space-between;
   gap:12px;
   padding:10px 12px;
-  border:1px solid var(--line);
+  border:1px solid var(--border);
   border-radius:var(--radius);
-  background:var(--surface-2);
+  background:var(--panel-2);
+  color:var(--muted);
 }
 
 .task-list button{
-  border:0;
-  background:transparent;
-  color:var(--red);
-  font:800 0.82rem/1 var(--mono);
+  min-height:32px;
+  padding:7px 9px;
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  background:var(--panel-3);
+  color:var(--danger);
+  font:600 0.78rem/1 var(--font-mono);
+  letter-spacing:0.06em;
+  text-transform:uppercase;
   cursor:pointer;
+}
+
+.task-list button:hover{
+  border-color:var(--border-strong);
+  background:#202329;
+}
+
+.task-list button:focus-visible{
+  outline:none;
+  box-shadow:0 0 0 3px rgba(255,255,255,0.04);
 }
 
 @media (max-width:620px){
