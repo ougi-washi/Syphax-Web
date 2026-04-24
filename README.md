@@ -151,12 +151,12 @@ Grouped file:
 ```json
 {
   "ar": {
-    "Search": "\u0628\u062d\u062b",
-    "Language": "\u0627\u0644\u0644\u063a\u0629"
+    "Search": "بحث",
+    "Language": "اللغة"
   },
   "ja": {
-    "Search": "\u691c\u7d22",
-    "Language": "\u8a00\u8a9e"
+    "Search": "検索",
+    "Language": "言語"
   }
 }
 ```
