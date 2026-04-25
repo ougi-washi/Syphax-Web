@@ -138,6 +138,7 @@ struct sw_connection {
     sw_http_header_array response_headers;
     sw_http_message request;
     b8 request_ready;
+    b8 request_dispatched;
     b8 request_started;
     b8 headers_complete;
     b8 response_started;

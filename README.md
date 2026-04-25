@@ -213,7 +213,7 @@ English source text is the fallback. The installed file is `share/syphax_web/tra
 ## Common API
 
 - HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
-- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_get_cookie`, `sw_http_set_cookie`, `sw_http_clear_cookie`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
+- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_get_cookie`, `sw_http_next_multipart`, `sw_http_multipart_save`, `sw_http_upload_save`, `sw_http_set_cookie`, `sw_http_clear_cookie`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
 - Sessions: `sw_sessions_create`, `sw_sessions_start`, `sw_session_get`, `sw_session_set`, `sw_sessions_end`, `sw_sessions_destroy`
 - Tokens: `sw_tokens_create`, `sw_tokens_login`, `sw_tokens_current`, `sw_token_get`, `sw_token_set`, `sw_tokens_logout`
 - JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`

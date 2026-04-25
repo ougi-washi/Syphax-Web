@@ -3,6 +3,7 @@
 #include "sw_server.h"
 #include "sw_translator.h"
 #include "sw_utility.h"
+#include "syphax/s_thread.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -41,8 +42,12 @@
 typedef struct {
     const c8* docroot;
     const c8* file_name;
+    const c8* upload_path;
     sw_sessions* sessions;
     sw_tokens* tokens;
+    sz uploaded_size;
+    b8 upload_body_pending;
+    b8 upload_seen_file;
     int request_count;
 } sw_test_server_state;
 
@@ -288,6 +293,54 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     if (sw_http_is(request, "POST", "/form")) {
         assert(sw_http_get_form(request, "name", query, sizeof(query)) > 0);
         sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "name=%s", query);
+        return;
+    }
+
+    if (sw_http_is(request, "POST", "/upload")) {
+        sw_http_multipart part;
+        sz offset = 0;
+        char note[128];
+        char uploaded_name[128] = "";
+
+        if (request->body_pending) {
+            assert(state->upload_path != NULL);
+            assert(sw_http_upload_save(connection, request, "file", state->upload_path, &state->uploaded_size) == 0);
+            state->upload_body_pending = 1;
+            state->upload_seen_file = 1;
+            sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+                "file=big.bin size=%zu body_pending=%d",
+                state->uploaded_size,
+                state->upload_body_pending);
+            return;
+        }
+
+        assert(sw_http_get_form(request, "note", note, sizeof(note)) > 0);
+        memset(&part, 0, sizeof(part));
+        while (sw_http_next_multipart(request, &part, &offset)) {
+            if (part.filename != NULL) {
+                assert(part.name != NULL && strcmp(part.name, "file") == 0);
+                assert(part.content_type != NULL && strcmp(part.content_type, "application/octet-stream") == 0);
+                assert(part.data_len > 0);
+                assert(part.data != NULL);
+                if (state->upload_path != NULL) {
+                    assert(sw_http_multipart_save(&part, state->upload_path) == 0);
+                }
+                state->uploaded_size = part.data_len;
+                state->upload_body_pending = request->body_pending;
+                state->upload_seen_file = 1;
+                snprintf(uploaded_name, sizeof(uploaded_name), "%s", part.filename);
+            }
+            sw_http_multipart_clear(&part);
+            memset(&part, 0, sizeof(part));
+        }
+
+        assert(state->upload_seen_file);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+            "note=%s file=%s size=%zu body_pending=%d",
+            note,
+            uploaded_name,
+            state->uploaded_size,
+            state->upload_body_pending);
         return;
     }
 
@@ -846,10 +899,13 @@ static void test_js_short_api(void) {
 }
 
 static void test_request_helpers(void) {
-    sw_http_header headers[] = {
-        { "Content-Type", "multipart/form-data; boundary=\"demo\"" },
+    sw_http_header form_headers[] = {
+        { "Content-Type", "application/x-www-form-urlencoded" },
         { "Cookie", "theme=dark; empty=; quoted=\"light mode\"; encoded=A%2FB" },
         { "Cookie", "second=two" }
+    };
+    sw_http_header multipart_headers[] = {
+        { "Content-Type", "multipart/form-data; boundary=\"demo\"" }
     };
     const c8 multipart_body[] =
         "--demo\r\n"
@@ -866,7 +922,7 @@ static void test_request_helpers(void) {
         .method = "POST",
         .uri = "/upload?q=Jane+Doe&empty=&encoded=A%2FB",
         .proto = "HTTP/1.1",
-        .headers = headers,
+        .headers = form_headers,
         .num_headers = 3,
         .body = "name=Jane+Doe&city=Tokyo",
         .body_len = strlen("name=Jane+Doe&city=Tokyo"),
@@ -876,8 +932,8 @@ static void test_request_helpers(void) {
         .method = "POST",
         .uri = "/upload",
         .proto = "HTTP/1.1",
-        .headers = headers,
-        .num_headers = 3,
+        .headers = multipart_headers,
+        .num_headers = 1,
         .body = multipart_body,
         .body_len = sizeof(multipart_body) - 1,
         .content_length = sizeof(multipart_body) - 1
@@ -902,6 +958,8 @@ static void test_request_helpers(void) {
     assert(strcmp(value, "Jane Doe") == 0);
     assert(sw_http_get_form(&message, "missing", value, sizeof(value)) == 0);
     assert(strcmp(value, "") == 0);
+    assert(sw_http_get_form(&multipart_message, "note", value, sizeof(value)) > 0);
+    assert(strcmp(value, "hello") == 0);
     assert(sw_http_get_cookie(&message, "theme", value, sizeof(value)) > 0);
     assert(strcmp(value, "dark") == 0);
     assert(sw_http_get_cookie(&message, "quoted", value, sizeof(value)) > 0);
@@ -1210,6 +1268,142 @@ static sw_test_response read_response_from_socket(sw_mgr* mgr, sw_test_socket fd
 
     response.size = response_len;
     return response;
+}
+
+static c8 upload_fixture_byte(sz index) {
+    return (c8)('A' + (index % 23));
+}
+
+static sz upload_fixture_file_size(void) {
+    const char* value = getenv("SW_TEST_UPLOAD_BYTES");
+    char* end = NULL;
+    unsigned long long parsed;
+
+    if (value == NULL || *value == '\0') {
+        return (3 * 1024 * 1024) + 123;
+    }
+
+    errno = 0;
+    parsed = strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed == 0 || parsed > (unsigned long long)((sz)-1)) {
+        return (3 * 1024 * 1024) + 123;
+    }
+    return (sz)parsed;
+}
+
+static void send_all_polled(sw_mgr* mgr, sw_test_socket fd, const void* data, sz data_len) {
+    const c8* cursor = (const c8*)data;
+    sz sent_total = 0;
+
+    while (sent_total < data_len) {
+        const sz remaining = data_len - sent_total;
+        const int send_len = remaining > 16384 ? 16384 : (int)remaining;
+        const int sent = (int)send(fd, cursor + sent_total, send_len, 0);
+
+        if (sent > 0) {
+            sent_total += (sz)sent;
+            assert(sw_mgr_poll(mgr, 1) >= 0);
+            continue;
+        }
+
+#ifdef _WIN32
+        assert(WSAGetLastError() == WSAEWOULDBLOCK);
+#else
+        assert(errno == EAGAIN || errno == EWOULDBLOCK);
+#endif
+        assert(sw_mgr_poll(mgr, 5) >= 0);
+        sw_test_sleep_ms(1);
+    }
+}
+
+typedef struct {
+    sw_test_socket fd;
+    const c8* header;
+    const c8* prefix;
+    const c8* suffix;
+    sz file_size;
+    b8 ok;
+} sw_upload_sender;
+
+static b8 send_all_socket(sw_test_socket fd, const void* data, sz data_len) {
+    const c8* cursor = (const c8*)data;
+    sz sent_total = 0;
+
+    while (sent_total < data_len) {
+        const sz remaining = data_len - sent_total;
+        const int send_len = remaining > 16384 ? 16384 : (int)remaining;
+        const int sent = (int)send(fd, cursor + sent_total, send_len, 0);
+
+        if (sent > 0) {
+            sent_total += (sz)sent;
+            continue;
+        }
+
+#ifdef _WIN32
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+            return 0;
+        }
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return 0;
+        }
+#endif
+        s_thread_sleep_ms(1);
+    }
+
+    return 1;
+}
+
+static b8 send_upload_fixture_bytes_socket(sw_test_socket fd, sz file_size) {
+    c8 chunk[16384];
+    sz written = 0;
+
+    while (written < file_size) {
+        const sz chunk_len = (file_size - written) < sizeof(chunk) ? (file_size - written) : sizeof(chunk);
+        sz i;
+
+        for (i = 0; i < chunk_len; ++i) {
+            chunk[i] = upload_fixture_byte(written + i);
+        }
+        if (!send_all_socket(fd, chunk, chunk_len)) {
+            return 0;
+        }
+        written += chunk_len;
+    }
+
+    return 1;
+}
+
+static void* upload_sender_main(void* arg) {
+    sw_upload_sender* sender = (sw_upload_sender*)arg;
+
+    sender->ok = send_all_socket(sender->fd, sender->header, strlen(sender->header))
+        && send_all_socket(sender->fd, sender->prefix, strlen(sender->prefix))
+        && send_upload_fixture_bytes_socket(sender->fd, sender->file_size)
+        && send_all_socket(sender->fd, sender->suffix, strlen(sender->suffix));
+
+    return NULL;
+}
+
+static void assert_upload_fixture_file(const c8* path, sz expected_size) {
+    FILE* file = fopen(path, "rb");
+    c8 chunk[16384];
+    sz checked = 0;
+
+    assert(file != NULL);
+    while (checked < expected_size) {
+        const sz wanted = (expected_size - checked) < sizeof(chunk) ? (expected_size - checked) : sizeof(chunk);
+        const sz read_bytes = fread(chunk, 1, wanted, file);
+        sz i;
+
+        assert(read_bytes == wanted);
+        for (i = 0; i < read_bytes; ++i) {
+            assert(chunk[i] == upload_fixture_byte(checked + i));
+        }
+        checked += read_bytes;
+    }
+    assert(fgetc(file) == EOF);
+    fclose(file);
 }
 
 static b8 wait_socket_closed(sw_mgr* mgr, sw_test_socket fd, int max_attempts, i32 poll_ms, i32 sleep_ms) {
@@ -1798,6 +1992,96 @@ static void test_cookie_helpers(void) {
     assert(strstr(response.data, "Set-Cookie: seen=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Lax") != NULL);
     free(response.data);
 
+    sw_mgr_destroy(mgr);
+}
+
+static void test_large_multipart_upload(void) {
+    const char boundary[] = "large-upload-boundary";
+    const char prefix[] =
+        "--large-upload-boundary\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n";
+    const char suffix[] =
+        "\r\n--large-upload-boundary\r\n"
+        "Content-Disposition: form-data; name=\"note\"\r\n"
+        "\r\n"
+        "large file\r\n"
+        "--large-upload-boundary--\r\n";
+    const sz file_size = upload_fixture_file_size();
+    const sz body_len = (sizeof(prefix) - 1) + file_size + (sizeof(suffix) - 1);
+    sw_server_config config = sw_server_config_default();
+    sw_mgr* mgr;
+    sw_test_server_state state = {0};
+    sw_test_socket fd;
+    sw_test_response response;
+    sw_upload_sender sender;
+    s_thread sender_thread;
+    char upload_name[256];
+    char upload_path[512];
+    char request_header[1024];
+    u16 port;
+
+    config.max_body_bytes = body_len + 1024;
+    config.max_read_buffer_bytes = 32 * 1024;
+    config.body_timeout_ms = 120 * 1000;
+
+    unique_name("upload.bin", upload_name, sizeof(upload_name));
+    temp_path(upload_path, sizeof(upload_path), upload_name);
+    remove(upload_path);
+    state.upload_path = upload_path;
+
+    mgr = sw_mgr_create(&config);
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    fd = connect_to_port(port);
+    assert(snprintf(request_header, sizeof(request_header),
+        "POST /upload HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: multipart/form-data; boundary=%s\r\n"
+        "Content-Length: %zu\r\n"
+        "\r\n",
+        boundary,
+        body_len) > 0);
+
+    memset(&sender, 0, sizeof(sender));
+    sender.fd = fd;
+    sender.header = request_header;
+    sender.prefix = prefix;
+    sender.suffix = suffix;
+    sender.file_size = file_size;
+    assert(s_thread_create(&sender_thread, upload_sender_main, &sender));
+
+    response = read_response_from_socket(mgr, fd, 200, 5, 1);
+    assert(s_thread_join(&sender_thread, NULL));
+    assert(sender.ok);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    assert(strstr(response.data, "file=big.bin") != NULL);
+    assert(strstr(response.data, "body_pending=1") != NULL);
+    assert(state.upload_seen_file);
+    assert(state.upload_body_pending);
+    assert(state.uploaded_size == file_size);
+    free(response.data);
+
+    assert_upload_fixture_file(upload_path, file_size);
+
+    send_all_polled(mgr, fd, "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n", strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    response = read_response_from_socket(mgr, fd, 120, 5, 1);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    assert(strstr(response.data, "Content-Type: text/css; charset=utf-8") != NULL);
+    free(response.data);
+
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    remove(upload_path);
     sw_mgr_destroy(mgr);
 }
 
@@ -2470,6 +2754,7 @@ static const sw_named_test sw_named_tests[] = {
     { "request_helpers", test_request_helpers },
     { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server },
+    { "large_multipart_upload", test_large_multipart_upload },
     { "cookie_helpers", test_cookie_helpers },
     { "session_helpers", test_session_helpers },
     { "token_helpers", test_token_helpers },

@@ -66,6 +66,7 @@ typedef struct {
     const c8* body;
     sz body_len;
     sz content_length;
+    b8 body_pending;
     b8 is_chunked;
 } sw_http_message;
 
@@ -158,6 +159,8 @@ SW_API i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf,
 SW_API i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_get_cookie(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset);
+SW_API i32 sw_http_multipart_save(const sw_http_multipart* mp, const c8* path);
+SW_API i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, const c8* name, const c8* path, sz* out_size);
 SW_API void sw_http_multipart_clear(sw_http_multipart* mp);
 
 SW_API sw_session_config sw_session_config_default(void);
