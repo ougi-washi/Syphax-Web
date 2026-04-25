@@ -36,7 +36,8 @@ typedef enum {
 
 enum {
     SW_FILE_SEND_CHUNK_BYTES = 16 * 1024,
-    SW_UPLOAD_READ_CHUNK_BYTES = 16 * 1024
+    SW_UPLOAD_READ_CHUNK_BYTES = 16 * 1024,
+    SW_UPLOAD_PATH_BYTES = 4096
 };
 
 #if defined(SYPHAX_WEB_HAS_TLS)
@@ -128,6 +129,8 @@ static void sw_mgr_schedule_connection_timeout(sw_mgr* mgr, sw_connection* conne
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
 static i32 sw_http_send_file(sw_connection* connection, const c8* path);
 static void sw_connection_clear_response_headers(sw_connection* connection);
+static b8 sw_http_header_name_is_valid(const c8* name);
+static b8 sw_http_header_value_is_valid(const c8* value);
 static b8 sw_path_join(char* out, sz out_cap, const c8* lhs, const c8* rhs);
 static b8 sw_path_real(const c8* path, char* out, sz out_cap);
 static b8 sw_path_has_prefix(const c8* path, const c8* prefix);
@@ -147,6 +150,9 @@ static const c8* sw_find_multipart_boundary(
 static b8 sw_header_value_matches_name(const c8* line, sz line_len, const c8* name);
 static c8* sw_parse_disposition_param(const c8* line, sz line_len, const c8* key);
 static c8* sw_strdup_trimmed_range(const c8* text, sz text_len);
+static sw_http_upload_field* sw_http_upload_field_find(sw_http_upload_field* fields, sz field_count, const c8* name);
+static i32 sw_http_upload_field_store(sw_http_upload_field* field, const c8* data, sz data_len);
+static i32 sw_http_fixed_upload_path(const sw_http_multipart* part, c8* path, sz path_len, void* user_data);
 static i32 sw_random_bytes(u8* out, sz out_len);
 static void sw_session_free(sw_session* session);
 static void sw_sessions_remove_at(sw_sessions* sessions, sz index);
@@ -298,6 +304,9 @@ const c8* sw_http_status_text(i32 status_code) {
         case 204: return "No Content";
         case 301: return "Moved Permanently";
         case 302: return "Found";
+        case 303: return "See Other";
+        case 307: return "Temporary Redirect";
+        case 308: return "Permanent Redirect";
         case 400: return "Bad Request";
         case 408: return "Request Timeout";
         case 401: return "Unauthorized";
@@ -3095,10 +3104,40 @@ static void sw_connection_prepare_response(sw_connection* connection) {
     connection->close_after_write = !sw_request_allows_keep_alive(connection);
 }
 
+static b8 sw_http_header_name_is_valid(const c8* name) {
+    const unsigned char* cursor = (const unsigned char*)name;
+
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+    while (*cursor != '\0') {
+        const unsigned char ch = *cursor++;
+        if (ch <= 32 || ch >= 127 || strchr("()<>@,;:\\\"/[]?={}", (int)ch) != NULL) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static b8 sw_http_header_value_is_valid(const c8* value) {
+    const unsigned char* cursor = (const unsigned char*)value;
+
+    if (value == NULL) {
+        return 0;
+    }
+    while (*cursor != '\0') {
+        const unsigned char ch = *cursor++;
+        if (ch == '\r' || ch == '\n' || (ch < 32 && ch != '\t') || ch == 127) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static i32 sw_http_queue_header(sw_connection* connection, const c8* name, const c8* value) {
     sw_http_header header;
 
-    if (connection == NULL || name == NULL || value == NULL) {
+    if (connection == NULL || !sw_http_header_name_is_valid(name) || !sw_http_header_value_is_valid(value)) {
         return -1;
     }
     if (sw_char_array_size(&connection->write_buffer) > 0 || connection->file_stream != NULL) {
@@ -3114,6 +3153,10 @@ static i32 sw_http_queue_header(sw_connection* connection, const c8* name, const
     }
     s_array_add(&connection->response_headers, header);
     return 0;
+}
+
+i32 sw_http_set_header(sw_connection* connection, const c8* name, const c8* value) {
+    return sw_http_queue_header(connection, name, value);
 }
 
 static b8 sw_connection_can_append_output(const sw_connection* connection, sz add_len) {
@@ -3300,6 +3343,16 @@ i32 sw_http_replyf(sw_connection* connection, i32 status_code, const c8* content
     rc = sw_http_reply(connection, status_code, content_type, sw_char_array_data(&body), sw_char_array_size(&body));
     sw_char_array_free(&body);
     return rc;
+}
+
+i32 sw_http_redirect(sw_connection* connection, const c8* location) {
+    if (connection == NULL || location == NULL || location[0] == '\0') {
+        return -1;
+    }
+    if (sw_http_set_header(connection, "Location", location) != 0) {
+        return -1;
+    }
+    return sw_http_reply(connection, 303, "text/plain; charset=utf-8", "", 0);
 }
 
 i32 sw_http_write(sw_connection* connection, const void* data, sz data_len) {
@@ -4047,6 +4100,31 @@ b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path) {
         && strncmp(hm->uri, path, path_len) == 0;
 }
 
+b8 sw_http_path_is(const sw_http_message* hm, const c8* path) {
+    const sz request_path_len = sw_http_path_length((hm != NULL) ? hm->uri : NULL);
+    const sz path_len = (path != NULL) ? strlen(path) : 0;
+
+    if (hm == NULL || hm->uri == NULL || path == NULL) {
+        return 0;
+    }
+
+    return request_path_len == path_len && strncmp(hm->uri, path, path_len) == 0;
+}
+
+b8 sw_http_path_starts(const sw_http_message* hm, const c8* prefix) {
+    const sz request_path_len = sw_http_path_length((hm != NULL) ? hm->uri : NULL);
+    const sz prefix_len = (prefix != NULL) ? strlen(prefix) : 0;
+
+    if (hm == NULL || hm->uri == NULL || prefix == NULL) {
+        return 0;
+    }
+    if (prefix_len == 0 || request_path_len < prefix_len) {
+        return 0;
+    }
+
+    return strncmp(hm->uri, prefix, prefix_len) == 0;
+}
+
 i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
     const c8* query;
     sz query_len;
@@ -4269,6 +4347,51 @@ i32 sw_http_multipart_save(const sw_http_multipart* mp, const c8* path) {
     return ok ? 0 : -1;
 }
 
+static sw_http_upload_field* sw_http_upload_field_find(sw_http_upload_field* fields, sz field_count, const c8* name) {
+    sz i;
+
+    if (fields == NULL || name == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < field_count; ++i) {
+        if (fields[i].name != NULL && strcmp(fields[i].name, name) == 0) {
+            return &fields[i];
+        }
+    }
+    return NULL;
+}
+
+static i32 sw_http_upload_field_store(sw_http_upload_field* field, const c8* data, sz data_len) {
+    if (field == NULL || field->value == NULL || field->value_len == 0) {
+        return -1;
+    }
+    if (data_len >= field->value_len) {
+        field->value[0] = '\0';
+        return -1;
+    }
+    if (data_len > 0 && data == NULL) {
+        field->value[0] = '\0';
+        return -1;
+    }
+    if (data_len > 0) {
+        memcpy(field->value, data, data_len);
+    }
+    field->value[data_len] = '\0';
+    return (i32)data_len;
+}
+
+static i32 sw_http_fixed_upload_path(const sw_http_multipart* part, c8* path, sz path_len, void* user_data) {
+    const c8* fixed_path = (const c8*)user_data;
+    int written;
+
+    (void)part;
+    if (fixed_path == NULL || path == NULL || path_len == 0) {
+        return -1;
+    }
+    written = snprintf(path, path_len, "%s", fixed_path);
+    return written >= 0 && (sz)written < path_len ? 0 : -1;
+}
+
 typedef struct {
     sw_connection* connection;
     sz remaining;
@@ -4387,12 +4510,29 @@ static b8 sw_upload_marker_prefix(const c8* marker, sz marker_len, const c8* pen
     return pending_len <= marker_len && memcmp(marker, pending, pending_len) == 0;
 }
 
-static int sw_upload_emit_part_bytes(FILE* out, const c8* data, sz data_len, sz* out_size) {
+static int sw_upload_emit_part_bytes(
+    FILE* out,
+    sw_http_upload_field* field,
+    sz* field_used,
+    const c8* data,
+    sz data_len,
+    sz* out_size
+) {
     if (data_len == 0) {
         return 0;
     }
     if (out != NULL && fwrite(data, 1, data_len, out) != data_len) {
         return -1;
+    }
+    if (field != NULL) {
+        if (field_used == NULL || field->value == NULL || field->value_len == 0
+            || *field_used > field->value_len
+            || data_len >= field->value_len - *field_used) {
+            return -1;
+        }
+        memcpy(field->value + *field_used, data, data_len);
+        *field_used += data_len;
+        field->value[*field_used] = '\0';
     }
     if (out_size != NULL) {
         *out_size += data_len;
@@ -4405,6 +4545,8 @@ static int sw_upload_read_part_data(
     const c8* marker,
     sz marker_len,
     FILE* out,
+    sw_http_upload_field* field,
+    sz* field_used,
     sz* out_size
 ) {
     c8 pending[512];
@@ -4412,6 +4554,13 @@ static int sw_upload_read_part_data(
 
     if (reader == NULL || marker == NULL || marker_len == 0 || marker_len > sizeof(pending)) {
         return -1;
+    }
+    if (field != NULL) {
+        if (field->value == NULL || field->value_len == 0 || field_used == NULL) {
+            return -1;
+        }
+        field->value[0] = '\0';
+        *field_used = 0;
     }
 
     while (reader->remaining > 0) {
@@ -4423,7 +4572,7 @@ static int sw_upload_read_part_data(
 
         pending[pending_len++] = ch;
         while (pending_len > 0 && !sw_upload_marker_prefix(marker, marker_len, pending, pending_len)) {
-            if (sw_upload_emit_part_bytes(out, pending, 1, out_size) != 0) {
+            if (sw_upload_emit_part_bytes(out, field, field_used, pending, 1, out_size) != 0) {
                 return -1;
             }
             memmove(pending, pending + 1, pending_len - 1);
@@ -4438,10 +4587,20 @@ static int sw_upload_read_part_data(
     return -1;
 }
 
-i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, const c8* name, const c8* path, sz* out_size) {
+i32 sw_http_upload_save_fields(
+    sw_connection* connection,
+    const sw_http_message* hm,
+    const c8* file_field,
+    sw_http_upload_path_fn path_fn,
+    sw_http_upload_field* fields,
+    sz field_count,
+    sz* out_size,
+    void* user_data
+) {
     char boundary[256];
     char boundary_line[260];
     char data_marker[262];
+    char upload_path[SW_UPLOAD_PATH_BYTES];
     sw_upload_reader reader;
     sw_char_array line;
     sw_http_multipart part;
@@ -4453,26 +4612,45 @@ i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, co
     if (out_size != NULL) {
         *out_size = 0;
     }
-    if (connection == NULL || hm == NULL || path == NULL) {
+    if (connection == NULL || hm == NULL || path_fn == NULL || (fields == NULL && field_count > 0)) {
         return -1;
+    }
+    for (sz i = 0; i < field_count; ++i) {
+        if (fields[i].value != NULL && fields[i].value_len > 0) {
+            fields[i].value[0] = '\0';
+        }
     }
 
     if (!hm->body_pending) {
         sz offset = 0;
         memset(&part, 0, sizeof(part));
         while (sw_http_next_multipart(hm, &part, &offset)) {
-            if (part.filename != NULL && (name == NULL || (part.name != NULL && strcmp(part.name, name) == 0))) {
-                rc = sw_http_multipart_save(&part, path);
-                if (rc == 0 && out_size != NULL) {
-                    *out_size = part.data_len;
+            if (part.filename == NULL) {
+                sw_http_upload_field* field = sw_http_upload_field_find(fields, field_count, part.name);
+                if (field != NULL && sw_http_upload_field_store(field, part.data, part.data_len) < 0) {
+                    sw_http_multipart_clear(&part);
+                    return -1;
                 }
-                sw_http_multipart_clear(&part);
-                return rc;
+            } else if (!saved && (file_field == NULL || (part.name != NULL && strcmp(part.name, file_field) == 0))) {
+                if (path_fn(&part, upload_path, sizeof(upload_path), user_data) != 0 || upload_path[0] == '\0') {
+                    sw_http_multipart_clear(&part);
+                    return -1;
+                }
+                rc = sw_http_multipart_save(&part, upload_path);
+                if (rc != 0) {
+                    sw_http_multipart_clear(&part);
+                    return -1;
+                }
+                saved = 1;
+                saved_size = part.data_len;
             }
             sw_http_multipart_clear(&part);
             memset(&part, 0, sizeof(part));
         }
-        return -1;
+        if (saved && out_size != NULL) {
+            *out_size = saved_size;
+        }
+        return saved ? 0 : -1;
     }
 
     if (&connection->request != hm
@@ -4503,6 +4681,8 @@ i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, co
 
     for (;;) {
         b8 target_part = 0;
+        sw_http_upload_field* target_field = NULL;
+        sz field_used = 0;
         sz part_size = 0;
 
         sw_http_multipart_clear(&part);
@@ -4543,15 +4723,29 @@ i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, co
 
         target_part = !saved
             && part.filename != NULL
-            && (name == NULL || (part.name != NULL && strcmp(part.name, name) == 0));
+            && (file_field == NULL || (part.name != NULL && strcmp(part.name, file_field) == 0));
+        if (part.filename == NULL) {
+            target_field = sw_http_upload_field_find(fields, field_count, part.name);
+        }
         if (target_part) {
-            out = fopen(path, "wb");
+            if (path_fn(&part, upload_path, sizeof(upload_path), user_data) != 0 || upload_path[0] == '\0') {
+                goto done;
+            }
+            out = fopen(upload_path, "wb");
             if (out == NULL) {
                 goto done;
             }
         }
 
-        if (sw_upload_read_part_data(&reader, data_marker, strlen(data_marker), out, target_part ? &part_size : NULL) <= 0) {
+        if (sw_upload_read_part_data(
+                &reader,
+                data_marker,
+                strlen(data_marker),
+                out,
+                target_field,
+                target_field != NULL ? &field_used : NULL,
+                target_part ? &part_size : NULL
+            ) <= 0) {
             goto done;
         }
         if (out != NULL) {
@@ -4597,6 +4791,13 @@ done:
         }
     }
     return rc;
+}
+
+i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, const c8* name, const c8* path, sz* out_size) {
+    if (path == NULL) {
+        return -1;
+    }
+    return sw_http_upload_save_fields(connection, hm, name, sw_http_fixed_upload_path, NULL, 0, out_size, (void*)path);
 }
 
 void sw_http_multipart_clear(sw_http_multipart* mp) {

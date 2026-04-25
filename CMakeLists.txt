@@ -66,6 +66,7 @@ set(SYPHAX_WEB_PRIVATE_HEADERS
 set(SYPHAX_WEB_VENDOR_HEADERS
     ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_json.h
 )
 
 set(SYPHAX_WEB_TRANSLATIONS_FILE
@@ -189,6 +190,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_test(NAME syphax_web_tests_request_helpers COMMAND syphax_web_tests request_helpers)
     add_test(NAME syphax_web_tests_utility_helpers COMMAND syphax_web_tests utility_helpers)
     add_test(NAME syphax_web_tests_live_server COMMAND syphax_web_tests live_server)
+    add_test(NAME syphax_web_tests_response_helpers COMMAND syphax_web_tests response_helpers)
     add_test(NAME syphax_web_tests_large_multipart_upload COMMAND syphax_web_tests large_multipart_upload)
     add_test(NAME syphax_web_tests_large_multipart_upload_failure COMMAND syphax_web_tests large_multipart_upload_failure)
     add_test(NAME syphax_web_tests_cookie_helpers COMMAND syphax_web_tests cookie_helpers)
@@ -219,6 +221,7 @@ install(FILES ${SYPHAX_WEB_PUBLIC_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDI
 install(FILES
     ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_json.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/syphax
 )
 install(FILES ${SYPHAX_WEB_TRANSLATIONS_FILE}

@@ -49,6 +49,8 @@ typedef struct {
     b8 upload_body_pending;
     b8 upload_seen_file;
     b8 expect_upload_failure;
+    char uploaded_name[128];
+    char upload_note[128];
     int request_count;
 } sw_test_server_state;
 
@@ -263,6 +265,24 @@ static sw_translator* create_fixture_translator(void) {
     return translator;
 }
 
+static i32 sw_test_upload_path(const sw_http_multipart* part, c8* path, sz path_len, void* user_data) {
+    sw_test_server_state* state = (sw_test_server_state*)user_data;
+    int name_written;
+    int path_written;
+
+    assert(part != NULL);
+    assert(part->filename != NULL);
+    assert(state != NULL);
+    assert(state->upload_path != NULL);
+
+    name_written = snprintf(state->uploaded_name, sizeof(state->uploaded_name), "%s", part->filename);
+    path_written = snprintf(path, path_len, "%s", state->upload_path);
+    if (name_written < 0 || (sz)name_written >= sizeof(state->uploaded_name)) {
+        return -1;
+    }
+    return path_written >= 0 && (sz)path_written < path_len ? 0 : -1;
+}
+
 static void sw_test_handler(sw_connection* connection, const sw_http_message* request, void* user_data) {
     sw_test_server_state* state = (sw_test_server_state*)user_data;
     char query[128];
@@ -302,56 +322,28 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     }
 
     if (sw_http_is(request, "POST", "/upload")) {
-        sw_http_multipart part;
-        sz offset = 0;
-        char note[128];
-        char uploaded_name[128] = "";
+        const b8 body_pending = request->body_pending;
+        sw_http_upload_field fields[] = {
+            { "note", state->upload_note, sizeof(state->upload_note) }
+        };
 
-        if (request->body_pending) {
-            assert(state->upload_path != NULL);
-            if (state->expect_upload_failure) {
-                assert(sw_http_upload_save(connection, request, "file", state->upload_path, &state->uploaded_size) != 0);
-                state->upload_body_pending = request->body_pending;
-                sw_http_replyf(connection, 400, "text/plain; charset=utf-8",
-                    "upload failed body_pending=%d",
-                    state->upload_body_pending);
-                return;
-            }
-            assert(sw_http_upload_save(connection, request, "file", state->upload_path, &state->uploaded_size) == 0);
-            state->upload_body_pending = 1;
-            state->upload_seen_file = 1;
-            sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
-                "file=big.bin size=%zu body_pending=%d",
-                state->uploaded_size,
+        assert(state->upload_path != NULL);
+        if (state->expect_upload_failure) {
+            assert(sw_http_upload_save_fields(connection, request, "file", sw_test_upload_path, fields, 1, &state->uploaded_size, state) != 0);
+            state->upload_body_pending = body_pending;
+            sw_http_replyf(connection, 400, "text/plain; charset=utf-8",
+                "upload failed body_pending=%d",
                 state->upload_body_pending);
             return;
         }
 
-        assert(sw_http_get_form(request, "note", note, sizeof(note)) > 0);
-        memset(&part, 0, sizeof(part));
-        while (sw_http_next_multipart(request, &part, &offset)) {
-            if (part.filename != NULL) {
-                assert(part.name != NULL && strcmp(part.name, "file") == 0);
-                assert(part.content_type != NULL && strcmp(part.content_type, "application/octet-stream") == 0);
-                assert(part.data_len > 0);
-                assert(part.data != NULL);
-                if (state->upload_path != NULL) {
-                    assert(sw_http_multipart_save(&part, state->upload_path) == 0);
-                }
-                state->uploaded_size = part.data_len;
-                state->upload_body_pending = request->body_pending;
-                state->upload_seen_file = 1;
-                snprintf(uploaded_name, sizeof(uploaded_name), "%s", part.filename);
-            }
-            sw_http_multipart_clear(&part);
-            memset(&part, 0, sizeof(part));
-        }
-
-        assert(state->upload_seen_file);
+        assert(sw_http_upload_save_fields(connection, request, "file", sw_test_upload_path, fields, 1, &state->uploaded_size, state) == 0);
+        state->upload_body_pending = body_pending;
+        state->upload_seen_file = 1;
         sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
             "note=%s file=%s size=%zu body_pending=%d",
-            note,
-            uploaded_name,
+            state->upload_note,
+            state->uploaded_name,
             state->uploaded_size,
             state->upload_body_pending);
         return;
@@ -374,6 +366,13 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     if (sw_http_is(request, "GET", "/clear-cookie")) {
         assert(sw_http_clear_cookie(connection, "seen", NULL) == 0);
         sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "cleared");
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/redirect")) {
+        assert(sw_http_set_header(connection, "X-Syphax-Test", "redirect") == 0);
+        assert(sw_http_set_cookie(connection, "flash", "1", NULL) == 0);
+        assert(sw_http_redirect(connection, "/target") == 0);
         return;
     }
 
@@ -977,6 +976,11 @@ static void test_request_helpers(void) {
     assert(sw_http_is(&message, "POST", "/upload"));
     assert(!sw_http_is(&message, "GET", "/upload"));
     assert(!sw_http_is(&message, "POST", "/other"));
+    assert(sw_http_path_is(&message, "/upload"));
+    assert(sw_http_path_is(&multipart_message, "/upload"));
+    assert(sw_http_path_starts(&message, "/upl"));
+    assert(!sw_http_path_is(&message, "/upload?q=Jane+Doe"));
+    assert(!sw_http_path_starts(&message, "/uploads"));
     assert(sw_http_get_query(&message, "q", value, sizeof(value)) > 0);
     assert(strcmp(value, "Jane Doe") == 0);
     assert(sw_http_get_query(&message, "encoded", value, sizeof(value)) > 0);
@@ -1806,8 +1810,12 @@ static void test_live_server(void) {
     char file_name[256];
     char docroot_path[512];
     char file_path[512];
+    char upload_name[256];
+    char upload_path[512];
     char request_buffer[1024];
+    char upload_data[5];
     FILE* file;
+    FILE* upload_file;
     u16 port;
     sw_test_response response;
     sw_test_socket keep_fd;
@@ -1824,10 +1832,9 @@ static void test_live_server(void) {
     fputs("public payload", file);
     fclose(file);
 
+    memset(&state, 0, sizeof(state));
     state.docroot = docroot_path;
     state.file_name = file_name;
-    state.sessions = NULL;
-    state.request_count = 0;
 
     listen_rc = sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state);
     assert(listen_rc == 0);
@@ -2003,7 +2010,58 @@ static void test_live_server(void) {
     assert(strstr(response.data, "HTTP/1.1 404 Not Found") != NULL);
     free(response.data);
 
-    assert(state.request_count == 15);
+    unique_name("small-upload.bin", upload_name, sizeof(upload_name));
+    temp_path(upload_path, sizeof(upload_path), upload_name);
+    remove(upload_path);
+    state.upload_path = upload_path;
+    state.uploaded_name[0] = '\0';
+    state.upload_note[0] = '\0';
+    state.uploaded_size = 0;
+    state.upload_seen_file = 0;
+
+    {
+        const c8 small_upload_body[] =
+        "--small\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"small.bin\"\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n"
+        "abcde\r\n"
+        "--small\r\n"
+        "Content-Disposition: form-data; name=\"note\"\r\n"
+        "\r\n"
+        "small file\r\n"
+        "--small--\r\n";
+
+        assert(snprintf(request_buffer, sizeof(request_buffer),
+            "POST /upload HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: multipart/form-data; boundary=small\r\n"
+            "Content-Length: %zu\r\n"
+            "\r\n"
+            "%s", strlen(small_upload_body), small_upload_body) > 0);
+        response = issue_request_bytes(mgr, port, request_buffer, strlen(request_buffer));
+    }
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    assert(strstr(response.data, "file=small.bin") != NULL);
+    assert(strstr(response.data, "note=small file") != NULL);
+    assert(strstr(response.data, "body_pending=0") != NULL);
+    assert(state.upload_seen_file);
+    assert(!state.upload_body_pending);
+    assert(state.uploaded_size == 5);
+    assert(strcmp(state.uploaded_name, "small.bin") == 0);
+    assert(strcmp(state.upload_note, "small file") == 0);
+    free(response.data);
+
+    upload_file = fopen(upload_path, "rb");
+    assert(upload_file != NULL);
+    assert(fread(upload_data, 1, sizeof(upload_data), upload_file) == sizeof(upload_data));
+    assert(fclose(upload_file) == 0);
+    assert(memcmp(upload_data, "abcde", sizeof(upload_data)) == 0);
+    remove(upload_path);
+    state.upload_path = NULL;
+
+    assert(state.request_count == 16);
     remove(file_path);
 #ifdef _WIN32
     RemoveDirectoryA(docroot_path);
@@ -2039,6 +2097,29 @@ static void test_cookie_helpers(void) {
     response = issue_request(mgr, port, "GET /clear-cookie HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "Set-Cookie: seen=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    free(response.data);
+
+    sw_mgr_destroy(mgr);
+}
+
+static void test_response_helpers(void) {
+    sw_mgr* mgr = sw_mgr_create(NULL);
+    sw_test_server_state state = {0};
+    sw_test_response response;
+    u16 port;
+
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    response = issue_request(mgr, port, "GET /redirect HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 303 See Other") != NULL);
+    assert(strstr(response.data, "Location: /target") != NULL);
+    assert(strstr(response.data, "X-Syphax-Test: redirect") != NULL);
+    assert(strstr(response.data, "Set-Cookie: flash=1; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    assert(strstr(response.data, "Content-Length: 0") != NULL);
     free(response.data);
 
     sw_mgr_destroy(mgr);
@@ -2110,10 +2191,13 @@ static void test_large_multipart_upload(void) {
     assert_complete_response(&response);
     assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
     assert(strstr(response.data, "file=big.bin") != NULL);
+    assert(strstr(response.data, "note=large file") != NULL);
     assert(strstr(response.data, "body_pending=1") != NULL);
     assert(state.upload_seen_file);
     assert(state.upload_body_pending);
     assert(state.uploaded_size == file_size);
+    assert(strcmp(state.uploaded_name, "big.bin") == 0);
+    assert(strcmp(state.upload_note, "large file") == 0);
     free(response.data);
 
     assert_upload_fixture_file(upload_path, file_size);
@@ -2886,6 +2970,7 @@ static const sw_named_test sw_named_tests[] = {
     { "request_helpers", test_request_helpers },
     { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server },
+    { "response_helpers", test_response_helpers },
     { "large_multipart_upload", test_large_multipart_upload },
     { "large_multipart_upload_failure", test_large_multipart_upload_failure_keeps_path },
     { "cookie_helpers", test_cookie_helpers },

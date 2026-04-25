@@ -79,6 +79,14 @@ typedef struct {
     c8* content_type;
 } sw_http_multipart;
 
+typedef struct {
+    const c8* name;
+    c8* value;
+    sz value_len;
+} sw_http_upload_field;
+
+typedef i32 (*sw_http_upload_path_fn)(const sw_http_multipart* part, c8* path, sz path_len, void* user_data);
+
 typedef struct sw_server_config {
     i32 listen_backlog;
     sz event_batch_size;
@@ -146,6 +154,8 @@ SW_API i32 sw_server_listen_tls(const c8* url, const sw_http_config* config, con
 
 SW_API i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_type, const void* body, sz body_len);
 SW_API i32 sw_http_replyf(sw_connection* connection, i32 status_code, const c8* content_type, const c8* fmt, ...);
+SW_API i32 sw_http_set_header(sw_connection* connection, const c8* name, const c8* value);
+SW_API i32 sw_http_redirect(sw_connection* connection, const c8* location);
 SW_API i32 sw_http_write(sw_connection* connection, const void* data, sz data_len);
 SW_API i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...);
 SW_API i32 sw_http_serve_path(sw_connection* connection, const c8* docroot, const c8* request_path);
@@ -154,6 +164,8 @@ SW_API i32 sw_http_set_cookie(sw_connection* connection, const c8* name, const c
 SW_API i32 sw_http_clear_cookie(sw_connection* connection, const c8* name, const sw_http_cookie* options);
 
 SW_API b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path);
+SW_API b8 sw_http_path_is(const sw_http_message* hm, const c8* path);
+SW_API b8 sw_http_path_starts(const sw_http_message* hm, const c8* prefix);
 SW_API const c8* sw_http_header_get(const sw_http_message* hm, const c8* name);
 SW_API i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
@@ -161,6 +173,16 @@ SW_API i32 sw_http_get_cookie(const sw_http_message* hm, const c8* name, c8* buf
 SW_API i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset);
 SW_API i32 sw_http_multipart_save(const sw_http_multipart* mp, const c8* path);
 SW_API i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, const c8* name, const c8* path, sz* out_size);
+SW_API i32 sw_http_upload_save_fields(
+    sw_connection* connection,
+    const sw_http_message* hm,
+    const c8* file_field,
+    sw_http_upload_path_fn path_fn,
+    sw_http_upload_field* fields,
+    sz field_count,
+    sz* out_size,
+    void* user_data
+);
 SW_API void sw_http_multipart_clear(sw_http_multipart* mp);
 
 SW_API sw_session_config sw_session_config_default(void);
