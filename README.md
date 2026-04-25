@@ -205,12 +205,15 @@ English source text is the fallback. The installed file is `share/syphax_web/tra
 
 Build outputs:
 
-- `bin/01_http`: HTTP app on `http://127.0.0.1:8000`
-- `bin/02_https`: HTTPS status page on `https://127.0.0.1:8443`
-- `bin/03_static_site`: static HTTPS site on `https://127.0.0.1:8444`
-- `bin/04_live_queue`: live form demo on `https://127.0.0.1:8445`
-- `bin/05_folder_app`: folder-backed app on `https://127.0.0.1:8446`
-- `bin/06_session_login`: session login demo on `http://127.0.0.1:8001`
+Run one example at a time. They all bind port `8000`.
+For HTTPS examples, build with `./build.sh -tls`.
+
+- `bin/01_http`: basic app on `http://127.0.0.1:8000`, or `https://127.0.0.1:8000` in a TLS build
+- `bin/02_https`: HTTPS status page on `https://127.0.0.1:8000`
+- `bin/03_static_site`: static HTTPS site on `https://127.0.0.1:8000`
+- `bin/04_live_queue`: live form demo on `https://127.0.0.1:8000`
+- `bin/05_folder_app`: folder-backed app on `https://127.0.0.1:8000`
+- `bin/06_session_login`: HTTPS session login demo on `https://127.0.0.1:8000`
 
 ## Fit
 

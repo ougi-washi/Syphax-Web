@@ -176,7 +176,7 @@ int main(void) {
     }
 
     rc = listen_https(
-        "https://127.0.0.1:8444",
+        EXAMPLE_HTTPS_URL,
         &config,
         handle_request,
         &state,

@@ -13,6 +13,8 @@
 #endif
 
 #define COUNT_OF(_items) (sizeof(_items) / sizeof((_items)[0]))
+#define EXAMPLE_HTTP_URL "http://127.0.0.1:8000"
+#define EXAMPLE_HTTPS_URL "https://127.0.0.1:8000"
 
 static const sw_language example_languages[] = {
     { "en", "EN", SW_LANGUAGE_DIRECTION_LTR },

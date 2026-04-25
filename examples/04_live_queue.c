@@ -282,7 +282,7 @@ int main(void) {
     }
     seed_items(&state);
     rc = listen_https(
-        "https://127.0.0.1:8445",
+        EXAMPLE_HTTPS_URL,
         &config,
         handle_request,
         &state,

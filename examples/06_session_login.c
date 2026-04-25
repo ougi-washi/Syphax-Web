@@ -319,9 +319,13 @@ int main(void) {
     }
     seed_users(&state);
 
-    printf("Syphax-Web session login example\n");
-    printf("Open http://127.0.0.1:8001 in your browser\n");
-    rc = sw_server_listen("http://127.0.0.1:8001", &http, handle_request, &state);
+    rc = listen_https(
+        EXAMPLE_HTTPS_URL,
+        &http,
+        handle_request,
+        &state,
+        "Syphax-Web session login example"
+    );
     sw_sessions_destroy(state.sessions);
     return rc;
 }

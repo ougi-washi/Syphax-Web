@@ -70,7 +70,7 @@ int main(void) {
     sw_http_config config = http_config();
 
     return listen_https(
-        "https://127.0.0.1:8443",
+        EXAMPLE_HTTPS_URL,
         &config,
         handle_request,
         NULL,

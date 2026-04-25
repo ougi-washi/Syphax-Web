@@ -1,20 +1,21 @@
 #include "example_common.h"
 
 static void render_home(sw_connection* connection) {
+    const b8 secure = sw_connection_is_secure(connection);
     sw_buffer* h = sw_buffer_new();
 
     sw_html(h, sw_attrs(sw_attr("lang", "en")), {
         sw_head(h, sw_attrs(), {
-            render_head(h, "Syphax-Web HTTP");
+            render_head(h, secure ? "Syphax-Web HTTPS" : "Syphax-Web HTTP");
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell")), {
                 sw_section(h, sw_attrs(sw_attr("class", "hero")), {
-                    sw_span(h, sw_attrs(sw_attr("class", "kicker")), {
-                        sw_text(h, "HTTP");
+                    sw_span(h, sw_attrs(sw_attr("class", secure ? "kicker secure" : "kicker")), {
+                        sw_text(h, secure ? "HTTPS" : "HTTP");
                     });
                     sw_h1(h, sw_attrs(), {
-                        sw_text(h, "Small HTTP server");
+                        sw_text(h, secure ? "Small HTTPS server" : "Small HTTP server");
                     });
                     sw_p(h, sw_attrs(sw_attr("class", "lead")), {
                         sw_text(h, "A minimal handler renders HTML, serves a shared stylesheet, and returns a plain health response.");
@@ -69,7 +70,17 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 int main(void) {
     sw_http_config config = http_config();
 
+#if defined(SYPHAX_WEB_HAS_TLS)
+    return listen_https(
+        EXAMPLE_HTTPS_URL,
+        &config,
+        handle_request,
+        NULL,
+        "Syphax-Web basic HTTPS example"
+    );
+#else
     printf("Syphax-Web HTTP example\n");
-    printf("Open http://127.0.0.1:8000 in your browser\n");
-    return sw_server_listen("http://127.0.0.1:8000", &config, handle_request, NULL);
+    printf("Open %s in your browser\n", EXAMPLE_HTTP_URL);
+    return sw_server_listen(EXAMPLE_HTTP_URL, &config, handle_request, NULL);
+#endif
 }
