@@ -57,6 +57,7 @@ static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset);
 static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms);
 static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection);
 static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connection* connection);
+static void sw_mgr_flush_pending_output(sw_mgr* mgr);
 static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
 static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
@@ -926,6 +927,26 @@ static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connectio
     }
 }
 
+static void sw_mgr_flush_pending_output(sw_mgr* mgr) {
+    sz i = 0;
+
+    if (mgr == NULL) {
+        return;
+    }
+
+    while (i < s_array_get_size(&mgr->connections)) {
+        sw_connection* connection = s_array_get_data(&mgr->connections)[i];
+
+        if (sw_connection_has_pending_output(connection)) {
+            if (sw_mgr_connection_writable(mgr, connection) < 0) {
+                continue;
+            }
+        }
+
+        ++i;
+    }
+}
+
 b8 sw_connection_wants_read(const sw_connection* connection) {
     if (connection == NULL) {
         return 0;
@@ -1637,6 +1658,7 @@ static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code,
 
 static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connection* connection, f64 now_ms) {
     f64 remaining_ms = -1.0;
+    b8 has_timeout = 0;
 
     if (mgr == NULL || connection == NULL) {
         return -1;
@@ -1663,6 +1685,7 @@ static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connec
 #if defined(SYPHAX_WEB_HAS_TLS)
     if (sw_connection_tls_handshake_pending(connection) && connection->tls_handshake_timeout_ms > 0) {
         remaining_ms = (f64)connection->tls_handshake_timeout_ms - (now_ms - connection->tls_handshake_started_at_ms);
+        has_timeout = 1;
     }
 #endif
 
@@ -1674,20 +1697,22 @@ static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connec
         const i32 phase_timeout_ms = connection->headers_complete ? mgr->config.body_timeout_ms : mgr->config.header_timeout_ms;
         if (phase_timeout_ms > 0) {
             const f64 phase_remaining_ms = (f64)phase_timeout_ms - (now_ms - connection->phase_started_at_ms);
-            if (remaining_ms < 0.0 || phase_remaining_ms < remaining_ms) {
+            if (!has_timeout || phase_remaining_ms < remaining_ms) {
                 remaining_ms = phase_remaining_ms;
             }
+            has_timeout = 1;
         }
     }
 
     if (mgr->config.idle_timeout_ms > 0) {
         const f64 idle_remaining_ms = (f64)mgr->config.idle_timeout_ms - (now_ms - connection->last_activity_at_ms);
-        if (remaining_ms < 0.0 || idle_remaining_ms < remaining_ms) {
+        if (!has_timeout || idle_remaining_ms < remaining_ms) {
             remaining_ms = idle_remaining_ms;
         }
+        has_timeout = 1;
     }
 
-    if (remaining_ms < 0.0) {
+    if (!has_timeout) {
         return -1;
     }
     if (remaining_ms <= 0.0) {
@@ -1769,12 +1794,14 @@ i32 sw_mgr_poll(sw_mgr* mgr, i32 timeout_ms) {
         return 0;
     }
     sw_mgr_enforce_timeouts(mgr);
+    sw_mgr_flush_pending_output(mgr);
     timeout_ms = sw_mgr_effective_poll_timeout(mgr, timeout_ms);
     rc = sw_backend_poll(mgr, timeout_ms);
     if (rc < 0) {
         return -1;
     }
     sw_mgr_enforce_timeouts(mgr);
+    sw_mgr_flush_pending_output(mgr);
     return rc;
 }
 
