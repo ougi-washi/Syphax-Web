@@ -146,17 +146,17 @@ Override them by passing a `sw_http_config` to `sw_mgr_create` or `sw_server_lis
 
 ## Translations
 
-Grouped file:
+Source-grouped file:
 
 ```json
 {
-  "ar": {
-    "Search": "بحث",
-    "Language": "اللغة"
+  "Search": {
+    "ar": "بحث",
+    "ja": "検索"
   },
-  "ja": {
-    "Search": "検索",
-    "Language": "言語"
+  "Language": {
+    "ar": "اللغة",
+    "ja": "言語"
   }
 }
 ```
@@ -176,7 +176,7 @@ sw_add_language(tr, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_
 sw_translator_set_language(tr, "ja");
 ```
 
-One file, one object per language. English stays the source-text fallback, so no separate `en.json` is needed.
+One file, one object per source string. English stays the source-text fallback, so no separate `en.json` is needed.
 
 Installed translations file:
 

@@ -1,79 +1,107 @@
 {
-  "ar": {
-    "Syphax Web": "صيفاقس ويب",
-    "Language": "اللغة",
-    "Search": "بحث",
-    "Live Search": "بحث مباشر",
-    "One helper emits debounced in-page updates without a separate JavaScript asset.": "يولد مساعد واحد تحديثات مؤجلة داخل الصفحة من دون ملف جافاسكربت منفصل.",
-    "HTTP Helpers": "مساعدات HTTP",
-    "Query fields and routes stay readable without manual buffer clearing in every handler.": "تبقى المسارات وحقول الاستعلام واضحة من دون إعادة تهيئة المخازن في كل معالج.",
-    "Render Functions": "دوال العرض",
-    "Pages are easier to copy when markup is split into small focused C functions.": "تصبح الصفحات أسهل في النسخ عندما يُقسَّم الترميز إلى دوال C صغيرة ومركزة.",
-    "Library Features": "ميزات المكتبة",
-    "Live Preview": "معاينة مباشرة",
-    "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.": "يبقي هذا المثال منطق الصفحة في C، ويتيح لك تبديل اللغات، ويحدث المعاينة أثناء الكتابة.",
-    "Open Full Search Page": "افتح صفحة البحث الكاملة",
-    "Typing updates the preview below, and the selected language stays active for both the page and the live search.": "تحدّث الكتابة المعاينة أدناه، وتبقى اللغة المختارة مفعلة للصفحة وللبحث المباشر.",
-    "Type in the search field to preview matching feature cards here.": "اكتب في حقل البحث لعرض بطاقات الميزات المطابقة هنا.",
-    "Matching features for the current query.": "الميزات المطابقة للاستعلام الحالي.",
-    "No matching example features.": "لا توجد ميزات تجريبية مطابقة.",
-    "Static assets are served from the resources directory through the same library API.": "تُقدَّم الملفات الثابتة من مجلد resources عبر واجهة المكتبة نفسها."
+  "Syphax Web": {
+    "ar": "صيفاقس ويب"
   },
-  "fa": {
-    "Language": "زبان",
-    "Search": "جستجو",
-    "Live Search": "جستجوی زنده",
-    "One helper emits debounced in-page updates without a separate JavaScript asset.": "یک helper بدون نیاز به فایل JavaScript جداگانه، به روزرسانی های داخل صفحه را با تاخیر کنترل شده انجام می دهد.",
-    "HTTP Helpers": "هلپرهای HTTP",
-    "Query fields and routes stay readable without manual buffer clearing in every handler.": "فیلدهای query و مسیرها بدون پاک کردن دستی بافر در هر handler خوانا می مانند.",
-    "Render Functions": "توابع رندر",
-    "Pages are easier to copy when markup is split into small focused C functions.": "وقتی markup به توابع کوچک و متمرکز C تقسیم می شود، کپی کردن صفحه ها آسان تر می شود.",
-    "Library Features": "قابلیت های کتابخانه",
-    "Live Preview": "پیش نمایش زنده",
-    "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.": "این مثال منطق صفحه را در C نگه می دارد، امکان تغییر زبان را می دهد و هنگام تایپ پیش نمایش را به روزرسانی می کند.",
-    "Open Full Search Page": "باز کردن صفحه کامل جستجو",
-    "Typing updates the preview below, and the selected language stays active for both the page and the live search.": "با تایپ، پیش نمایش زیر به روز می شود و زبان انتخاب شده هم برای صفحه و هم برای جستجوی زنده فعال می ماند.",
-    "Type in the search field to preview matching feature cards here.": "برای پیش نمایش کارت های ویژگی منطبق در اینجا، در فیلد جستجو تایپ کنید.",
-    "Matching features for the current query.": "قابلیت های منطبق با جستجوی فعلی.",
-    "No matching example features.": "هیچ قابلیت نمونه منطبقی وجود ندارد.",
-    "Static assets are served from the resources directory through the same library API.": "فایل های static از طریق همان API کتابخانه از پوشه resources ارائه می شوند."
+  "Language": {
+    "ar": "اللغة",
+    "fa": "زبان",
+    "zh": "语言",
+    "ja": "言語"
   },
-  "zh": {
-    "Language": "语言",
-    "Search": "搜索",
-    "Live Search": "实时搜索",
-    "One helper emits debounced in-page updates without a separate JavaScript asset.": "一个辅助函数即可在不使用单独 JavaScript 资源的情况下发出带防抖的页内更新。",
-    "HTTP Helpers": "HTTP 辅助函数",
-    "Query fields and routes stay readable without manual buffer clearing in every handler.": "查询字段和路由无需在每个处理函数中手动清空缓冲区，仍然保持清晰易读。",
-    "Render Functions": "渲染函数",
-    "Pages are easier to copy when markup is split into small focused C functions.": "当标记被拆分成小而专注的 C 函数时，页面更容易复用。",
-    "Library Features": "库功能",
-    "Live Preview": "实时预览",
-    "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.": "这个示例将页面逻辑保留在 C 中，允许你切换语言，并在输入时更新预览。",
-    "Open Full Search Page": "打开完整搜索页面",
-    "Typing updates the preview below, and the selected language stays active for both the page and the live search.": "输入时会更新下方预览，所选语言会同时应用到页面和实时搜索。",
-    "Type in the search field to preview matching feature cards here.": "在搜索框中输入，即可在此预览匹配的功能卡片。",
-    "Matching features for the current query.": "与当前查询匹配的功能。",
-    "No matching example features.": "没有匹配的示例功能。",
-    "Static assets are served from the resources directory through the same library API.": "静态资源通过同一套库 API 从 resources 目录提供。"
+  "Search": {
+    "ar": "بحث",
+    "fa": "جستجو",
+    "zh": "搜索",
+    "ja": "検索"
   },
-  "ja": {
-    "Language": "言語",
-    "Search": "検索",
-    "Live Search": "ライブ検索",
-    "One helper emits debounced in-page updates without a separate JavaScript asset.": "1つのヘルパーで、別の JavaScript アセットなしに入力に合わせたページ内更新を行えます。",
-    "HTTP Helpers": "HTTP ヘルパー",
-    "Query fields and routes stay readable without manual buffer clearing in every handler.": "各ハンドラで手動のバッファ初期化をしなくても、ルートとクエリ処理を読みやすく保てます。",
-    "Render Functions": "描画関数",
-    "Pages are easier to copy when markup is split into small focused C functions.": "マークアップを小さく役割のはっきりした C 関数に分けると、ページ構成をそのまま再利用しやすくなります。",
-    "Library Features": "ライブラリの機能",
-    "Live Preview": "ライブプレビュー",
-    "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.": "この例ではページロジックを C に保ったまま、言語を切り替えつつ入力に合わせてプレビューを更新できます。",
-    "Open Full Search Page": "検索ページ全体を開く",
-    "Typing updates the preview below, and the selected language stays active for both the page and the live search.": "入力すると下のプレビューが更新され、選んだ言語はページ全体とライブ検索の両方で維持されます。",
-    "Type in the search field to preview matching feature cards here.": "検索欄に入力すると、ここに一致する機能カードのプレビューが表示されます。",
-    "Matching features for the current query.": "現在の検索語に一致する機能です。",
-    "No matching example features.": "一致するサンプル機能はありません。",
-    "Static assets are served from the resources directory through the same library API.": "静的アセットも同じライブラリ API を通して resources ディレクトリから配信されます。"
+  "Live Search": {
+    "ar": "بحث مباشر",
+    "fa": "جستجوی زنده",
+    "zh": "实时搜索",
+    "ja": "ライブ検索"
+  },
+  "One helper emits debounced in-page updates without a separate JavaScript asset.": {
+    "ar": "يولد مساعد واحد تحديثات مؤجلة داخل الصفحة من دون ملف جافاسكربت منفصل.",
+    "fa": "یک helper بدون نیاز به فایل JavaScript جداگانه، به روزرسانی های داخل صفحه را با تاخیر کنترل شده انجام می دهد.",
+    "zh": "一个辅助函数即可在不使用单独 JavaScript 资源的情况下发出带防抖的页内更新。",
+    "ja": "1つのヘルパーで、別の JavaScript アセットなしに入力に合わせたページ内更新を行えます。"
+  },
+  "HTTP Helpers": {
+    "ar": "مساعدات HTTP",
+    "fa": "هلپرهای HTTP",
+    "zh": "HTTP 辅助函数",
+    "ja": "HTTP ヘルパー"
+  },
+  "Query fields and routes stay readable without manual buffer clearing in every handler.": {
+    "ar": "تبقى المسارات وحقول الاستعلام واضحة من دون إعادة تهيئة المخازن في كل معالج.",
+    "fa": "فیلدهای query و مسیرها بدون پاک کردن دستی بافر در هر handler خوانا می مانند.",
+    "zh": "查询字段和路由无需在每个处理函数中手动清空缓冲区，仍然保持清晰易读。",
+    "ja": "各ハンドラで手動のバッファ初期化をしなくても、ルートとクエリ処理を読みやすく保てます。"
+  },
+  "Render Functions": {
+    "ar": "دوال العرض",
+    "fa": "توابع رندر",
+    "zh": "渲染函数",
+    "ja": "描画関数"
+  },
+  "Pages are easier to copy when markup is split into small focused C functions.": {
+    "ar": "تصبح الصفحات أسهل في النسخ عندما يُقسَّم الترميز إلى دوال C صغيرة ومركزة.",
+    "fa": "وقتی markup به توابع کوچک و متمرکز C تقسیم می شود، کپی کردن صفحه ها آسان تر می شود.",
+    "zh": "当标记被拆分成小而专注的 C 函数时，页面更容易复用。",
+    "ja": "マークアップを小さく役割のはっきりした C 関数に分けると、ページ構成をそのまま再利用しやすくなります。"
+  },
+  "Library Features": {
+    "ar": "ميزات المكتبة",
+    "fa": "قابلیت های کتابخانه",
+    "zh": "库功能",
+    "ja": "ライブラリの機能"
+  },
+  "Live Preview": {
+    "ar": "معاينة مباشرة",
+    "fa": "پیش نمایش زنده",
+    "zh": "实时预览",
+    "ja": "ライブプレビュー"
+  },
+  "This example keeps the page logic in C, lets you switch languages, and updates the preview as you type.": {
+    "ar": "يبقي هذا المثال منطق الصفحة في C، ويتيح لك تبديل اللغات، ويحدث المعاينة أثناء الكتابة.",
+    "fa": "این مثال منطق صفحه را در C نگه می دارد، امکان تغییر زبان را می دهد و هنگام تایپ پیش نمایش را به روزرسانی می کند.",
+    "zh": "这个示例将页面逻辑保留在 C 中，允许你切换语言，并在输入时更新预览。",
+    "ja": "この例ではページロジックを C に保ったまま、言語を切り替えつつ入力に合わせてプレビューを更新できます。"
+  },
+  "Open Full Search Page": {
+    "ar": "افتح صفحة البحث الكاملة",
+    "fa": "باز کردن صفحه کامل جستجو",
+    "zh": "打开完整搜索页面",
+    "ja": "検索ページ全体を開く"
+  },
+  "Typing updates the preview below, and the selected language stays active for both the page and the live search.": {
+    "ar": "تحدّث الكتابة المعاينة أدناه، وتبقى اللغة المختارة مفعلة للصفحة وللبحث المباشر.",
+    "fa": "با تایپ، پیش نمایش زیر به روز می شود و زبان انتخاب شده هم برای صفحه و هم برای جستجوی زنده فعال می ماند.",
+    "zh": "输入时会更新下方预览，所选语言会同时应用到页面和实时搜索。",
+    "ja": "入力すると下のプレビューが更新され、選んだ言語はページ全体とライブ検索の両方で維持されます。"
+  },
+  "Type in the search field to preview matching feature cards here.": {
+    "ar": "اكتب في حقل البحث لعرض بطاقات الميزات المطابقة هنا.",
+    "fa": "برای پیش نمایش کارت های ویژگی منطبق در اینجا، در فیلد جستجو تایپ کنید.",
+    "zh": "在搜索框中输入，即可在此预览匹配的功能卡片。",
+    "ja": "検索欄に入力すると、ここに一致する機能カードのプレビューが表示されます。"
+  },
+  "Matching features for the current query.": {
+    "ar": "الميزات المطابقة للاستعلام الحالي.",
+    "fa": "قابلیت های منطبق با جستجوی فعلی.",
+    "zh": "与当前查询匹配的功能。",
+    "ja": "現在の検索語に一致する機能です。"
+  },
+  "No matching example features.": {
+    "ar": "لا توجد ميزات تجريبية مطابقة.",
+    "fa": "هیچ قابلیت نمونه منطبقی وجود ندارد.",
+    "zh": "没有匹配的示例功能。",
+    "ja": "一致するサンプル機能はありません。"
+  },
+  "Static assets are served from the resources directory through the same library API.": {
+    "ar": "تُقدَّم الملفات الثابتة من مجلد resources عبر واجهة المكتبة نفسها.",
+    "fa": "فایل های static از طریق همان API کتابخانه از پوشه resources ارائه می شوند.",
+    "zh": "静态资源通过同一套库 API 从 resources 目录提供。",
+    "ja": "静的アセットも同じライブラリ API を通して resources ディレクトリから配信されます。"
   }
 }

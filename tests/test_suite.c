@@ -363,8 +363,18 @@ static void test_translator(void) {
     assert(!sw_translator_load_all_json_text(translator, "[\"bad\"]"));
     assert(!sw_translator_load_all_json_text(translator, "{\"ar\": 1}"));
     assert(!sw_translator_load_all_json_text(translator, "{\"ar\": {\"Search\": 1}}"));
-    assert(!sw_translator_load_all_json_text(translator, "{\"ar\": {\"Search\": \"A\", \"Search\": \"B\"}}"));
+    assert(!sw_translator_load_all_json_text(translator, "{\"Search\": {\"ar\": \"A\", \"ar\": \"B\"}}"));
+    assert(!sw_translator_load_all_json_text(translator, "{\"Search\": {\"Language\": \"A\"}}"));
     assert(!sw_translator_load_json_file(translator, "fr", "resources/missing-translations.json"));
+
+    assert(sw_translator_load_all_json_text(translator,
+        "{"
+            "\"Search\":{\"fr\":\"Chercher\"},"
+            "\"Language\":{\"fr\":\"Langage\"}"
+        "}"));
+    assert(sw_translator_set_language(translator, "fr"));
+    assert(strcmp(sw_translate(translator, "Search"), "Chercher") == 0);
+    assert(strcmp(sw_translate(translator, "Language"), "Langage") == 0);
 
     load_fixture_french(translator);
     assert(sw_translator_set_language(translator, "fr"));

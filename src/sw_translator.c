@@ -209,6 +209,30 @@ static b8 sw_json_object_name_seen_before(const s_json* object, sz index, const 
     return 0;
 }
 
+static b8 sw_translation_language_code_is_valid(const c8* code) {
+    sz i;
+
+    if (code == NULL || code[0] == '\0' || code[0] < 'a' || code[0] > 'z') {
+        return 0;
+    }
+
+    for (i = 1; code[i] != '\0'; ++i) {
+        const c8 ch = code[i];
+
+        if ((ch >= 'a' && ch <= 'z')
+            || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9')
+            || ch == '-'
+            || ch == '_') {
+            continue;
+        }
+
+        return 0;
+    }
+
+    return 1;
+}
+
 static b8 sw_translation_language_begin(sw_translation_language* language, const c8* code) {
     if (language == NULL || code == NULL || code[0] == '\0') {
         return 0;
@@ -224,6 +248,61 @@ static b8 sw_translation_language_begin(sw_translation_language* language, const
     }
 
     return 1;
+}
+
+static sw_translation_language* sw_translation_languages_find(sw_translation_language_array* languages, const c8* code) {
+    sz i;
+    sw_translation_language* data;
+
+    if (languages == NULL || code == NULL) {
+        return NULL;
+    }
+
+    data = s_array_get_data(languages);
+    for (i = 0; i < s_array_get_size(languages); ++i) {
+        if (data[i].code != NULL && strcmp(data[i].code, code) == 0) {
+            return &data[i];
+        }
+    }
+
+    return NULL;
+}
+
+static b8 sw_translation_languages_get_or_add(
+    sw_translation_language_array* languages,
+    const c8* code,
+    sw_translation_language** out_language
+) {
+    sw_translation_language language;
+    s_handle handle;
+
+    if (out_language != NULL) {
+        *out_language = NULL;
+    }
+    if (languages == NULL || !sw_translation_language_code_is_valid(code)) {
+        return 0;
+    }
+
+    if (out_language != NULL) {
+        *out_language = sw_translation_languages_find(languages, code);
+        if (*out_language != NULL) {
+            return 1;
+        }
+    } else if (sw_translation_languages_find(languages, code) != NULL) {
+        return 1;
+    }
+
+    if (!sw_translation_language_begin(&language, code)) {
+        return 0;
+    }
+
+    handle = s_array_add(languages, language);
+    if (out_language != NULL) {
+        *out_language = s_array_get(languages, handle);
+        return *out_language != NULL;
+    }
+
+    return s_array_get(languages, handle) != NULL;
 }
 
 static b8 sw_translator_build_flat_language(sw_translation_language* language, const c8* code, const s_json* root) {
@@ -388,7 +467,7 @@ static b8 sw_translator_load_file(sw_translator* translator, const c8* code, con
     return ok;
 }
 
-static b8 sw_translator_collect_languages(sw_translation_language_array* languages, const s_json* root) {
+static b8 sw_translator_collect_source_groups(sw_translation_language_array* languages, const s_json* root) {
     sz i;
 
     if (languages == NULL || root == NULL || root->type != S_JSON_OBJECT) {
@@ -398,23 +477,37 @@ static b8 sw_translator_collect_languages(sw_translation_language_array* languag
     s_array_init(languages);
 
     for (i = 0; i < root->as.children.count; ++i) {
-        const s_json* child = root->as.children.items[i];
-        sw_translation_language built;
+        sz j;
+        const s_json* source = root->as.children.items[i];
 
-        if (child == NULL
-            || child->name == NULL
-            || child->type != S_JSON_OBJECT
-            || sw_json_object_name_seen_before(root, i, child->name)) {
+        if (source == NULL
+            || source->name == NULL
+            || source->type != S_JSON_OBJECT
+            || sw_json_object_name_seen_before(root, i, source->name)) {
             sw_translation_languages_free(languages);
             return 0;
         }
 
-        if (!sw_translator_build_flat_language(&built, child->name, child)) {
-            sw_translation_languages_free(languages);
-            return 0;
-        }
+        for (j = 0; j < source->as.children.count; ++j) {
+            const s_json* translation = source->as.children.items[j];
+            sw_translation_language* language;
 
-        s_array_add(languages, built);
+            if (translation == NULL
+                || translation->name == NULL
+                || !sw_translation_language_code_is_valid(translation->name)
+                || translation->type != S_JSON_STRING
+                || translation->as.string == NULL
+                || sw_json_object_name_seen_before(source, j, translation->name)) {
+                sw_translation_languages_free(languages);
+                return 0;
+            }
+
+            if (!sw_translation_languages_get_or_add(languages, translation->name, &language)
+                || !sw_translation_items_add(&language->items, source->name, translation->as.string)) {
+                sw_translation_languages_free(languages);
+                return 0;
+            }
+        }
     }
 
     return 1;
@@ -436,7 +529,7 @@ static b8 sw_translator_load_all_text(sw_translator* translator, const c8* json_
         return 0;
     }
 
-    if (!sw_translator_collect_languages(&languages, root)) {
+    if (!sw_translator_collect_source_groups(&languages, root)) {
         s_json_free(root);
         return 0;
     }
