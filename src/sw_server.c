@@ -9,6 +9,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#    include <bcrypt.h>
+#endif
+
 #if !defined(_WIN32)
 #    include <signal.h>
 #endif
@@ -34,6 +38,32 @@ typedef enum {
     SW_TLS_OP_WRITE = 2
 } sw_tls_operation;
 #endif
+
+typedef struct {
+    c8* key;
+    c8* value;
+} sw_session_item;
+
+typedef s_array(sw_session_item, sw_session_item_array);
+
+struct sw_session {
+    c8 id[65];
+    sw_session_item_array items;
+    f64 expires_at_ms;
+    f64 touched_at_ms;
+    sz max_items;
+};
+
+typedef s_array(sw_session, sw_session_array);
+
+struct sw_sessions {
+    sw_session_array sessions;
+    c8* cookie_name;
+    sw_http_cookie cookie;
+    i32 ttl_seconds;
+    sz max_sessions;
+    sz max_items;
+};
 
 static sz sw_socket_runtime_users = 0;
 static sw_mgr* sw_signal_mgr = NULL;
@@ -63,6 +93,7 @@ static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
 static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
 static i32 sw_http_send_file(sw_connection* connection, const c8* path);
+static void sw_connection_clear_response_headers(sw_connection* connection);
 static b8 sw_path_join(char* out, sz out_cap, const c8* lhs, const c8* rhs);
 static b8 sw_path_real(const c8* path, char* out, sz out_cap);
 static b8 sw_path_has_prefix(const c8* path, const c8* prefix);
@@ -81,6 +112,9 @@ static const c8* sw_find_multipart_boundary(
 static b8 sw_header_value_matches_name(const c8* line, sz line_len, const c8* name);
 static c8* sw_parse_disposition_param(const c8* line, sz line_len, const c8* key);
 static c8* sw_strdup_trimmed_range(const c8* text, sz text_len);
+static i32 sw_random_bytes(u8* out, sz out_len);
+static void sw_session_free(sw_session* session);
+static void sw_sessions_remove_at(sw_sessions* sessions, sz index);
 
 #if defined(SYPHAX_WEB_HAS_TLS)
 static SSL_CTX* sw_tls_context_create(const sw_tls_config* config);
@@ -531,6 +565,13 @@ static void sw_http_header_array_free_owned(sw_http_header_array* headers) {
     s_array_clear(headers);
 }
 
+static void sw_connection_clear_response_headers(sw_connection* connection) {
+    if (connection != NULL) {
+        sw_http_header_array_free_owned(&connection->response_headers);
+        s_array_init(&connection->response_headers);
+    }
+}
+
 static b8 sw_parse_content_length_value(const c8* value, sz value_len, sz* out_length) {
     sz length = 0;
     sz i = 0;
@@ -772,6 +813,7 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
     sw_char_array_init(&connection->read_buffer);
     sw_char_array_init(&connection->write_buffer);
     s_array_init(&connection->header_storage);
+    s_array_init(&connection->response_headers);
 
     handle = s_array_add(&mgr->connections, connection);
     connection->array_handle = handle;
@@ -786,6 +828,7 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
         sw_char_array_free(&connection->read_buffer);
         sw_char_array_free(&connection->write_buffer);
         s_array_clear(&connection->header_storage);
+        s_array_clear(&connection->response_headers);
         free(connection);
         return NULL;
     }
@@ -850,6 +893,7 @@ void sw_mgr_close_connection(sw_mgr* mgr, sw_connection* connection) {
     }
 
     sw_connection_reset_request(connection);
+    sw_connection_clear_response_headers(connection);
     sw_char_array_free(&connection->read_buffer);
     sw_char_array_free(&connection->write_buffer);
 
@@ -1917,26 +1961,241 @@ i32 sw_server_listen_tls(
     return rc;
 }
 
-static int sw_connection_begin_response(sw_connection* connection, i32 status_code, const c8* content_type, sz content_length) {
-    char headers[512];
-    int written = snprintf(headers, sizeof(headers),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        status_code,
-        sw_http_status_text(status_code),
-        (content_type != NULL) ? content_type : "text/plain; charset=utf-8",
-        content_length);
+static b8 sw_cookie_name_is_valid(const c8* name) {
+    const c8* cursor = name;
 
-    if (written < 0 || (sz)written >= sizeof(headers)) {
+    if (name == NULL || *name == '\0') {
+        return 0;
+    }
+    while (*cursor != '\0') {
+        const unsigned char ch = (unsigned char)*cursor;
+        if (isalnum(ch) || ch == '!' || ch == '#' || ch == '$' || ch == '%' || ch == '&'
+            || ch == '\'' || ch == '*' || ch == '+' || ch == '-' || ch == '.'
+            || ch == '^' || ch == '_' || ch == '`' || ch == '|' || ch == '~') {
+            ++cursor;
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static b8 sw_cookie_value_is_valid(const c8* value) {
+    const c8* cursor = value;
+
+    if (value == NULL) {
+        return 0;
+    }
+    while (*cursor != '\0') {
+        const unsigned char ch = (unsigned char)*cursor;
+        if (ch < 0x21 || ch > 0x7e || ch == '"' || ch == ',' || ch == ';' || ch == '\\') {
+            return 0;
+        }
+        ++cursor;
+    }
+    return 1;
+}
+
+static b8 sw_cookie_attr_is_valid(const c8* value) {
+    const c8* cursor = value;
+
+    if (value == NULL) {
+        return 1;
+    }
+    while (*cursor != '\0') {
+        const unsigned char ch = (unsigned char)*cursor;
+        if (ch < 0x20 || ch == 0x7f || ch == ';' || ch == '\r' || ch == '\n') {
+            return 0;
+        }
+        ++cursor;
+    }
+    return 1;
+}
+
+static const c8* sw_cookie_same_site_name(sw_cookie_same_site same_site) {
+    switch (same_site) {
+        case SW_COOKIE_SAMESITE_LAX: return "Lax";
+        case SW_COOKIE_SAMESITE_STRICT: return "Strict";
+        case SW_COOKIE_SAMESITE_NONE: return "None";
+        case SW_COOKIE_SAMESITE_UNSET:
+        default: return NULL;
+    }
+}
+
+static b8 sw_cookie_append_options(sw_char_array* out, sw_connection* connection, const sw_http_cookie* options) {
+    char line[64];
+    int written;
+    const c8* same_site;
+    const b8 secure = options->secure || (options->secure_auto && sw_connection_is_secure(connection));
+
+    if (options->max_age >= 0) {
+        written = snprintf(line, sizeof(line), "; Max-Age=%lld", (long long)options->max_age);
+        if (written < 0 || (sz)written >= sizeof(line) || !sw_char_array_append_bytes(out, line, (sz)written)) {
+            return 0;
+        }
+    }
+    if (options->expires != NULL) {
+        if (!sw_cookie_attr_is_valid(options->expires)
+            || !sw_char_array_append_cstr(out, "; Expires=")
+            || !sw_char_array_append_cstr(out, options->expires)) {
+            return 0;
+        }
+    }
+    if (options->domain != NULL) {
+        if (!sw_cookie_attr_is_valid(options->domain)
+            || !sw_char_array_append_cstr(out, "; Domain=")
+            || !sw_char_array_append_cstr(out, options->domain)) {
+            return 0;
+        }
+    }
+    if (options->path != NULL) {
+        if (!sw_cookie_attr_is_valid(options->path)
+            || !sw_char_array_append_cstr(out, "; Path=")
+            || !sw_char_array_append_cstr(out, options->path)) {
+            return 0;
+        }
+    }
+    if (secure && !sw_char_array_append_cstr(out, "; Secure")) {
+        return 0;
+    }
+    if (options->http_only && !sw_char_array_append_cstr(out, "; HttpOnly")) {
+        return 0;
+    }
+    same_site = sw_cookie_same_site_name(options->same_site);
+    if (same_site != NULL
+        && (!sw_char_array_append_cstr(out, "; SameSite=")
+            || !sw_char_array_append_cstr(out, same_site))) {
+        return 0;
+    }
+    return 1;
+}
+
+static i32 sw_http_queue_header(sw_connection* connection, const c8* name, const c8* value) {
+    sw_http_header header;
+
+    if (connection == NULL || name == NULL || value == NULL) {
+        return -1;
+    }
+    if (sw_char_array_size(&connection->write_buffer) > 0 || connection->file_stream != NULL) {
+        return -1;
+    }
+
+    header.name = sw_strdup_cstr(name);
+    header.value = sw_strdup_cstr(value);
+    if (header.name == NULL || header.value == NULL) {
+        free((void*)header.name);
+        free((void*)header.value);
+        return -1;
+    }
+    s_array_add(&connection->response_headers, header);
+    return 0;
+}
+
+sw_http_cookie sw_http_cookie_default(void) {
+    const sw_http_cookie cookie = {
+        .path = "/",
+        .domain = NULL,
+        .expires = NULL,
+        .max_age = -1,
+        .http_only = 1,
+        .secure = 0,
+        .secure_auto = 1,
+        .same_site = SW_COOKIE_SAMESITE_LAX
+    };
+    return cookie;
+}
+
+static i32 sw_http_set_cookie_with_options(
+    sw_connection* connection,
+    const c8* name,
+    const c8* value,
+    const sw_http_cookie* options
+) {
+    sw_http_cookie effective;
+    sw_char_array cookie;
+    c8* cookie_value;
+    i32 rc;
+
+    if (connection == NULL || !sw_cookie_name_is_valid(name) || !sw_cookie_value_is_valid(value)) {
+        return -1;
+    }
+
+    effective = (options != NULL) ? *options : sw_http_cookie_default();
+    sw_char_array_init(&cookie);
+    if (!sw_char_array_append_cstr(&cookie, name)
+        || !sw_char_array_append_byte(&cookie, '=')
+        || !sw_char_array_append_cstr(&cookie, value)
+        || !sw_cookie_append_options(&cookie, connection, &effective)) {
+        sw_char_array_free(&cookie);
+        return -1;
+    }
+
+    cookie_value = sw_strdup_cstr(sw_char_array_data(&cookie));
+    sw_char_array_free(&cookie);
+    if (cookie_value == NULL) {
+        return -1;
+    }
+    rc = sw_http_queue_header(connection, "Set-Cookie", cookie_value);
+    free(cookie_value);
+    return rc;
+}
+
+i32 sw_http_set_cookie(sw_connection* connection, const c8* name, const c8* value, const sw_http_cookie* options) {
+    return sw_http_set_cookie_with_options(connection, name, value != NULL ? value : "", options);
+}
+
+i32 sw_http_clear_cookie(sw_connection* connection, const c8* name, const sw_http_cookie* options) {
+    sw_http_cookie effective = (options != NULL) ? *options : sw_http_cookie_default();
+
+    effective.max_age = 0;
+    if (effective.expires == NULL) {
+        effective.expires = "Thu, 01 Jan 1970 00:00:00 GMT";
+    }
+    return sw_http_set_cookie_with_options(connection, name, "", &effective);
+}
+
+static int sw_connection_begin_response(sw_connection* connection, i32 status_code, const c8* content_type, sz content_length) {
+    char line[128];
+    int written;
+    sz i;
+
+    if (connection == NULL) {
         return -1;
     }
 
     sw_char_array_reset(&connection->write_buffer);
     connection->close_after_write = 1;
-    return sw_char_array_append_bytes(&connection->write_buffer, headers, (sz)written) ? 0 : -1;
+
+    written = snprintf(line, sizeof(line), "HTTP/1.1 %d %s\r\n", status_code, sw_http_status_text(status_code));
+    if (written < 0 || (sz)written >= sizeof(line)
+        || !sw_char_array_append_bytes(&connection->write_buffer, line, (sz)written)
+        || !sw_char_array_append_cstr(&connection->write_buffer, "Content-Type: ")
+        || !sw_char_array_append_cstr(&connection->write_buffer, (content_type != NULL) ? content_type : "text/plain; charset=utf-8")
+        || !sw_char_array_append_cstr(&connection->write_buffer, "\r\n")) {
+        sw_connection_clear_response_headers(connection);
+        return -1;
+    }
+
+    written = snprintf(line, sizeof(line), "Content-Length: %zu\r\n", content_length);
+    if (written < 0 || (sz)written >= sizeof(line)
+        || !sw_char_array_append_bytes(&connection->write_buffer, line, (sz)written)) {
+        sw_connection_clear_response_headers(connection);
+        return -1;
+    }
+
+    for (i = 0; i < s_array_get_size(&connection->response_headers); ++i) {
+        sw_http_header* header = &s_array_get_data(&connection->response_headers)[i];
+        if (!sw_char_array_append_cstr(&connection->write_buffer, header->name)
+            || !sw_char_array_append_cstr(&connection->write_buffer, ": ")
+            || !sw_char_array_append_cstr(&connection->write_buffer, header->value)
+            || !sw_char_array_append_cstr(&connection->write_buffer, "\r\n")) {
+            sw_connection_clear_response_headers(connection);
+            return -1;
+        }
+    }
+
+    sw_connection_clear_response_headers(connection);
+    return sw_char_array_append_cstr(&connection->write_buffer, "Connection: close\r\n\r\n") ? 0 : -1;
 }
 
 i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_type, const void* body, sz body_len) {
@@ -2255,6 +2514,122 @@ const c8* sw_http_header_get(const sw_http_message* hm, const c8* name) {
         }
     }
     return NULL;
+}
+
+static i32 sw_http_copy_cookie_value(const c8* value, sz value_len, c8* buf, sz buf_len) {
+    sz cursor = 0;
+    sz written = 0;
+    const b8 quoted = value_len >= 2 && value[0] == '"' && value[value_len - 1] == '"';
+
+    if (buf == NULL || buf_len == 0) {
+        return -1;
+    }
+
+    buf[0] = '\0';
+    if (quoted) {
+        cursor = 1;
+        value_len -= 1;
+    }
+
+    while (cursor < value_len) {
+        c8 ch = value[cursor++];
+        if (quoted && ch == '\\' && cursor < value_len) {
+            ch = value[cursor++];
+        }
+        if (written + 1 < buf_len) {
+            buf[written++] = ch;
+        }
+    }
+    buf[written] = '\0';
+    return (i32)written;
+}
+
+i32 sw_http_get_cookie(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
+    const sz name_len = (name != NULL) ? strlen(name) : 0;
+    sz i;
+
+    if (buf != NULL && buf_len > 0) {
+        buf[0] = '\0';
+    }
+    if (hm == NULL || name == NULL || name_len == 0 || buf == NULL || buf_len == 0) {
+        return -1;
+    }
+
+    for (i = 0; i < hm->num_headers; ++i) {
+        const c8* cursor;
+        const c8* end;
+
+        if (hm->headers[i].name == NULL || hm->headers[i].value == NULL
+            || sw_stricmp_ascii(hm->headers[i].name, "Cookie") != 0) {
+            continue;
+        }
+
+        cursor = hm->headers[i].value;
+        end = cursor + strlen(cursor);
+        while (cursor < end) {
+            const c8* name_begin;
+            const c8* name_end;
+            const c8* value_begin;
+            const c8* value_end;
+
+            while (cursor < end && (*cursor == ';' || isspace((unsigned char)*cursor))) {
+                ++cursor;
+            }
+            name_begin = cursor;
+            while (cursor < end && *cursor != '=' && *cursor != ';') {
+                ++cursor;
+            }
+            name_end = cursor;
+            while (name_end > name_begin && isspace((unsigned char)name_end[-1])) {
+                --name_end;
+            }
+            if (cursor >= end || *cursor != '=') {
+                while (cursor < end && *cursor != ';') {
+                    ++cursor;
+                }
+                continue;
+            }
+
+            ++cursor;
+            while (cursor < end && isspace((unsigned char)*cursor)) {
+                ++cursor;
+            }
+            value_begin = cursor;
+            if (cursor < end && *cursor == '"') {
+                ++cursor;
+                while (cursor < end) {
+                    if (*cursor == '\\' && cursor + 1 < end) {
+                        cursor += 2;
+                        continue;
+                    }
+                    if (*cursor == '"') {
+                        ++cursor;
+                        break;
+                    }
+                    ++cursor;
+                }
+                value_end = cursor;
+            } else {
+                while (cursor < end && *cursor != ';') {
+                    ++cursor;
+                }
+                value_end = cursor;
+                while (value_end > value_begin && isspace((unsigned char)value_end[-1])) {
+                    --value_end;
+                }
+            }
+
+            if ((sz)(name_end - name_begin) == name_len && strncmp(name_begin, name, name_len) == 0) {
+                return sw_http_copy_cookie_value(value_begin, (sz)(value_end - value_begin), buf, buf_len);
+            }
+
+            while (cursor < end && *cursor != ';') {
+                ++cursor;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static sz sw_http_path_length(const c8* uri) {
@@ -2735,6 +3110,428 @@ void sw_http_multipart_clear(sw_http_multipart* mp) {
     free(mp->filename);
     free(mp->content_type);
     memset(mp, 0, sizeof(*mp));
+}
+
+static i32 sw_random_bytes(u8* out, sz out_len) {
+    sz done = 0;
+
+    if (out == NULL && out_len > 0) {
+        return -1;
+    }
+    if (out_len == 0) {
+        return 0;
+    }
+
+#ifdef _WIN32
+    return BCryptGenRandom(NULL, out, (ULONG)out_len, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+#else
+    {
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd < 0) {
+            return -1;
+        }
+        while (done < out_len) {
+            const ssize_t rc = read(fd, out + done, out_len - done);
+            if (rc < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                close(fd);
+                return -1;
+            }
+            if (rc == 0) {
+                close(fd);
+                return -1;
+            }
+            done += (sz)rc;
+        }
+        close(fd);
+        return 0;
+    }
+#endif
+}
+
+static b8 sw_session_id_is_valid(const c8* id) {
+    sz i;
+
+    if (id == NULL || strlen(id) != 64) {
+        return 0;
+    }
+    for (i = 0; i < 64; ++i) {
+        if (!isxdigit((unsigned char)id[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static b8 sw_session_generate_id(c8 out[65]) {
+    static const c8 hex[] = "0123456789abcdef";
+    u8 bytes[32];
+    sz i;
+
+    if (out == NULL || sw_random_bytes(bytes, sizeof(bytes)) != 0) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(bytes); ++i) {
+        out[i * 2] = hex[(bytes[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[bytes[i] & 0x0f];
+    }
+    out[64] = '\0';
+    return 1;
+}
+
+static void sw_session_free(sw_session* session) {
+    sz i;
+
+    if (session == NULL) {
+        return;
+    }
+    for (i = 0; i < s_array_get_size(&session->items); ++i) {
+        sw_session_item* item = &s_array_get_data(&session->items)[i];
+        free(item->key);
+        free(item->value);
+    }
+    s_array_clear(&session->items);
+    memset(session, 0, sizeof(*session));
+}
+
+static void sw_sessions_remove_at(sw_sessions* sessions, sz index) {
+    sw_session* session;
+    s_handle handle;
+
+    if (sessions == NULL || index >= s_array_get_size(&sessions->sessions)) {
+        return;
+    }
+    handle = s_array_handle(&sessions->sessions, (u32)index);
+    session = s_array_get(&sessions->sessions, handle);
+    sw_session_free(session);
+    s_array_remove_ordered(&sessions->sessions, handle);
+}
+
+static void sw_sessions_cleanup_expired(sw_sessions* sessions, f64 now_ms) {
+    sz i = 0;
+
+    if (sessions == NULL) {
+        return;
+    }
+    while (i < s_array_get_size(&sessions->sessions)) {
+        sw_session* session = &s_array_get_data(&sessions->sessions)[i];
+        if (session->expires_at_ms <= now_ms) {
+            sw_sessions_remove_at(sessions, i);
+            continue;
+        }
+        ++i;
+    }
+}
+
+static sw_session* sw_sessions_find_id(sw_sessions* sessions, const c8* id, f64 now_ms) {
+    sz i;
+
+    if (sessions == NULL || !sw_session_id_is_valid(id)) {
+        return NULL;
+    }
+    sw_sessions_cleanup_expired(sessions, now_ms);
+    for (i = 0; i < s_array_get_size(&sessions->sessions); ++i) {
+        sw_session* session = &s_array_get_data(&sessions->sessions)[i];
+        if (strcmp(session->id, id) == 0) {
+            return session;
+        }
+    }
+    return NULL;
+}
+
+static void sw_sessions_evict_oldest(sw_sessions* sessions) {
+    sz oldest_index = 0;
+    sz i;
+    f64 oldest_touched;
+
+    if (sessions == NULL || s_array_get_size(&sessions->sessions) == 0) {
+        return;
+    }
+
+    oldest_touched = s_array_get_data(&sessions->sessions)[0].touched_at_ms;
+    for (i = 1; i < s_array_get_size(&sessions->sessions); ++i) {
+        sw_session* session = &s_array_get_data(&sessions->sessions)[i];
+        if (session->touched_at_ms < oldest_touched) {
+            oldest_touched = session->touched_at_ms;
+            oldest_index = i;
+        }
+    }
+    sw_sessions_remove_at(sessions, oldest_index);
+}
+
+static b8 sw_session_cookie_has_values(const sw_http_cookie* cookie) {
+    return cookie != NULL
+        && (cookie->path != NULL
+            || cookie->domain != NULL
+            || cookie->expires != NULL
+            || cookie->max_age != 0
+            || cookie->http_only
+            || cookie->secure
+            || cookie->secure_auto
+            || cookie->same_site != SW_COOKIE_SAMESITE_UNSET);
+}
+
+static b8 sw_sessions_copy_cookie(sw_http_cookie* out, const sw_http_cookie* source) {
+    if (out == NULL || source == NULL) {
+        return 0;
+    }
+
+    *out = *source;
+    out->path = source->path != NULL ? sw_strdup_cstr(source->path) : NULL;
+    out->domain = source->domain != NULL ? sw_strdup_cstr(source->domain) : NULL;
+    out->expires = source->expires != NULL ? sw_strdup_cstr(source->expires) : NULL;
+
+    if ((source->path != NULL && out->path == NULL)
+        || (source->domain != NULL && out->domain == NULL)
+        || (source->expires != NULL && out->expires == NULL)) {
+        free((void*)out->path);
+        free((void*)out->domain);
+        free((void*)out->expires);
+        memset(out, 0, sizeof(*out));
+        return 0;
+    }
+    return 1;
+}
+
+static void sw_sessions_free_cookie(sw_http_cookie* cookie) {
+    if (cookie == NULL) {
+        return;
+    }
+    free((void*)cookie->path);
+    free((void*)cookie->domain);
+    free((void*)cookie->expires);
+    memset(cookie, 0, sizeof(*cookie));
+}
+
+sw_session_config sw_session_config_default(void) {
+    sw_session_config config;
+
+    memset(&config, 0, sizeof(config));
+    config.cookie_name = "sw_session";
+    config.ttl_seconds = 3600;
+    config.max_sessions = 1024;
+    config.max_items = 32;
+    config.cookie = sw_http_cookie_default();
+    config.cookie.max_age = -1;
+    return config;
+}
+
+sw_sessions* sw_sessions_create(const sw_session_config* config) {
+    sw_session_config effective = sw_session_config_default();
+    sw_sessions* sessions;
+    b8 explicit_cookie = 0;
+
+    if (config != NULL) {
+        if (config->cookie_name != NULL) {
+            effective.cookie_name = config->cookie_name;
+        }
+        if (config->ttl_seconds > 0) {
+            effective.ttl_seconds = config->ttl_seconds;
+        }
+        if (config->max_sessions > 0) {
+            effective.max_sessions = config->max_sessions;
+        }
+        if (config->max_items > 0) {
+            effective.max_items = config->max_items;
+        }
+        if (sw_session_cookie_has_values(&config->cookie)) {
+            effective.cookie = config->cookie;
+            explicit_cookie = 1;
+        }
+    }
+    if (!explicit_cookie || effective.cookie.max_age <= 0) {
+        effective.cookie.max_age = effective.ttl_seconds;
+    }
+
+    sessions = (sw_sessions*)calloc(1, sizeof(*sessions));
+    if (sessions == NULL) {
+        return NULL;
+    }
+    sessions->cookie_name = sw_strdup_cstr(effective.cookie_name);
+    sessions->ttl_seconds = effective.ttl_seconds;
+    sessions->max_sessions = effective.max_sessions;
+    sessions->max_items = effective.max_items;
+    s_array_init(&sessions->sessions);
+    if (sessions->cookie_name == NULL || !sw_sessions_copy_cookie(&sessions->cookie, &effective.cookie)) {
+        sw_sessions_destroy(sessions);
+        return NULL;
+    }
+    return sessions;
+}
+
+void sw_sessions_destroy(sw_sessions* sessions) {
+    sz i;
+
+    if (sessions == NULL) {
+        return;
+    }
+    for (i = 0; i < s_array_get_size(&sessions->sessions); ++i) {
+        sw_session_free(&s_array_get_data(&sessions->sessions)[i]);
+    }
+    s_array_clear(&sessions->sessions);
+    free(sessions->cookie_name);
+    sw_sessions_free_cookie(&sessions->cookie);
+    free(sessions);
+}
+
+sw_session* sw_sessions_find(sw_sessions* sessions, const sw_http_message* hm) {
+    c8 id[128];
+
+    if (sessions == NULL || hm == NULL) {
+        return NULL;
+    }
+    if (sw_http_get_cookie(hm, sessions->cookie_name, id, sizeof(id)) <= 0) {
+        sw_sessions_cleanup_expired(sessions, sw_now_ms());
+        return NULL;
+    }
+    return sw_sessions_find_id(sessions, id, sw_now_ms());
+}
+
+sw_session* sw_sessions_start(sw_sessions* sessions, sw_connection* connection, const sw_http_message* hm) {
+    const f64 now_ms = sw_now_ms();
+    sw_session* session = NULL;
+    sw_session new_session;
+    s_handle handle;
+    int attempt;
+
+    if (sessions == NULL || connection == NULL || hm == NULL) {
+        return NULL;
+    }
+
+    session = sw_sessions_find(sessions, hm);
+    if (session != NULL) {
+        session->touched_at_ms = now_ms;
+        session->expires_at_ms = now_ms + (f64)sessions->ttl_seconds * 1000.0;
+        return sw_http_set_cookie(connection, sessions->cookie_name, session->id, &sessions->cookie) == 0 ? session : NULL;
+    }
+
+    sw_sessions_cleanup_expired(sessions, now_ms);
+    while (s_array_get_size(&sessions->sessions) >= sessions->max_sessions && s_array_get_size(&sessions->sessions) > 0) {
+        sw_sessions_evict_oldest(sessions);
+    }
+
+    memset(&new_session, 0, sizeof(new_session));
+    s_array_init(&new_session.items);
+    new_session.expires_at_ms = now_ms + (f64)sessions->ttl_seconds * 1000.0;
+    new_session.touched_at_ms = now_ms;
+    new_session.max_items = sessions->max_items;
+
+    for (attempt = 0; attempt < 16; ++attempt) {
+        if (!sw_session_generate_id(new_session.id)) {
+            sw_session_free(&new_session);
+            return NULL;
+        }
+        if (sw_sessions_find_id(sessions, new_session.id, now_ms) == NULL) {
+            break;
+        }
+    }
+    if (attempt == 16) {
+        sw_session_free(&new_session);
+        return NULL;
+    }
+
+    handle = s_array_add(&sessions->sessions, new_session);
+    session = s_array_get(&sessions->sessions, handle);
+    if (session == NULL || sw_http_set_cookie(connection, sessions->cookie_name, session->id, &sessions->cookie) != 0) {
+        if (session != NULL) {
+            sw_session_free(session);
+            s_array_remove_ordered(&sessions->sessions, handle);
+        }
+        return NULL;
+    }
+    return session;
+}
+
+i32 sw_sessions_end(sw_sessions* sessions, sw_connection* connection, const sw_http_message* hm) {
+    c8 id[128];
+    sz i;
+
+    if (sessions == NULL || connection == NULL) {
+        return -1;
+    }
+    if (hm != NULL && sw_http_get_cookie(hm, sessions->cookie_name, id, sizeof(id)) > 0) {
+        for (i = 0; i < s_array_get_size(&sessions->sessions); ++i) {
+            sw_session* session = &s_array_get_data(&sessions->sessions)[i];
+            if (strcmp(session->id, id) == 0) {
+                sw_sessions_remove_at(sessions, i);
+                break;
+            }
+        }
+    }
+    return sw_http_clear_cookie(connection, sessions->cookie_name, &sessions->cookie);
+}
+
+const c8* sw_session_id(const sw_session* session) {
+    return (session != NULL) ? session->id : "";
+}
+
+const c8* sw_session_get(const sw_session* session, const c8* key) {
+    sz i;
+
+    if (session == NULL || key == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < s_array_get_size(&session->items); ++i) {
+        const sw_session_item* item = &s_array_get_data((sw_session_item_array*)&session->items)[i];
+        if (item->key != NULL && strcmp(item->key, key) == 0) {
+            return item->value;
+        }
+    }
+    return NULL;
+}
+
+i32 sw_session_set(sw_session* session, const c8* key, const c8* value) {
+    sz i;
+    sw_session_item item;
+
+    if (session == NULL || key == NULL || *key == '\0' || value == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s_array_get_size(&session->items); ++i) {
+        sw_session_item* existing = &s_array_get_data(&session->items)[i];
+        if (existing->key != NULL && strcmp(existing->key, key) == 0) {
+            c8* copy = sw_strdup_cstr(value);
+            if (copy == NULL) {
+                return -1;
+            }
+            free(existing->value);
+            existing->value = copy;
+            return 0;
+        }
+    }
+    if (s_array_get_size(&session->items) >= session->max_items) {
+        return -1;
+    }
+    item.key = sw_strdup_cstr(key);
+    item.value = sw_strdup_cstr(value);
+    if (item.key == NULL || item.value == NULL) {
+        free(item.key);
+        free(item.value);
+        return -1;
+    }
+    s_array_add(&session->items, item);
+    return 0;
+}
+
+i32 sw_session_remove(sw_session* session, const c8* key) {
+    sz i;
+
+    if (session == NULL || key == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s_array_get_size(&session->items); ++i) {
+        sw_session_item* item = &s_array_get_data(&session->items)[i];
+        if (item->key != NULL && strcmp(item->key, key) == 0) {
+            const s_handle handle = s_array_handle(&session->items, (u32)i);
+            free(item->key);
+            free(item->value);
+            s_array_remove_ordered(&session->items, handle);
+            return 0;
+        }
+    }
+    return 0;
 }
 
 const c8* sw_connection_remote_ip(const sw_connection* connection) {

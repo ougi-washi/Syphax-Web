@@ -10,11 +10,39 @@ extern "C" {
 
 typedef struct sw_mgr sw_mgr;
 typedef struct sw_connection sw_connection;
+typedef struct sw_sessions sw_sessions;
+typedef struct sw_session sw_session;
+
+typedef enum sw_cookie_same_site {
+    SW_COOKIE_SAMESITE_UNSET,
+    SW_COOKIE_SAMESITE_LAX,
+    SW_COOKIE_SAMESITE_STRICT,
+    SW_COOKIE_SAMESITE_NONE
+} sw_cookie_same_site;
 
 typedef struct {
     const c8* name;
     const c8* value;
 } sw_http_header;
+
+typedef struct {
+    const c8* path;
+    const c8* domain;
+    const c8* expires;
+    i64 max_age;
+    b8 http_only;
+    b8 secure;
+    b8 secure_auto;
+    sw_cookie_same_site same_site;
+} sw_http_cookie;
+
+typedef struct {
+    const c8* cookie_name;
+    i32 ttl_seconds;
+    sz max_sessions;
+    sz max_items;
+    sw_http_cookie cookie;
+} sw_session_config;
 
 typedef struct {
     const c8* method;
@@ -79,13 +107,28 @@ SW_API i32 sw_http_replyf(sw_connection* connection, i32 status_code, const c8* 
 SW_API i32 sw_http_write(sw_connection* connection, const void* data, sz data_len);
 SW_API i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...);
 SW_API i32 sw_http_serve_path(sw_connection* connection, const c8* docroot, const c8* request_path);
+SW_API sw_http_cookie sw_http_cookie_default(void);
+SW_API i32 sw_http_set_cookie(sw_connection* connection, const c8* name, const c8* value, const sw_http_cookie* options);
+SW_API i32 sw_http_clear_cookie(sw_connection* connection, const c8* name, const sw_http_cookie* options);
 
 SW_API b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path);
 SW_API const c8* sw_http_header_get(const sw_http_message* hm, const c8* name);
 SW_API i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
+SW_API i32 sw_http_get_cookie(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset);
 SW_API void sw_http_multipart_clear(sw_http_multipart* mp);
+
+SW_API sw_session_config sw_session_config_default(void);
+SW_API sw_sessions* sw_sessions_create(const sw_session_config* config);
+SW_API void sw_sessions_destroy(sw_sessions* sessions);
+SW_API sw_session* sw_sessions_find(sw_sessions* sessions, const sw_http_message* hm);
+SW_API sw_session* sw_sessions_start(sw_sessions* sessions, sw_connection* connection, const sw_http_message* hm);
+SW_API i32 sw_sessions_end(sw_sessions* sessions, sw_connection* connection, const sw_http_message* hm);
+SW_API const c8* sw_session_id(const sw_session* session);
+SW_API const c8* sw_session_get(const sw_session* session, const c8* key);
+SW_API i32 sw_session_set(sw_session* session, const c8* key, const c8* value);
+SW_API i32 sw_session_remove(sw_session* session, const c8* key);
 
 SW_API const c8* sw_connection_remote_ip(const sw_connection* connection);
 SW_API u16 sw_connection_remote_port(const sw_connection* connection);

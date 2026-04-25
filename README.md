@@ -71,6 +71,21 @@ Open `http://127.0.0.1:8000`.
 
 Pass `NULL` for default request limits and timeouts. Use `sw_http_config_default()` when you want to override them.
 
+## Cookies And Sessions
+
+```c
+char theme[32];
+sw_sessions* sessions = sw_sessions_create(NULL);
+
+sw_http_get_cookie(hm, "theme", theme, sizeof(theme));
+sw_http_set_cookie(c, "theme", "dark", NULL);
+
+sw_session* session = sw_sessions_start(sessions, c, hm);
+sw_session_set(session, "user_id", "42");
+```
+
+Default cookies use `Path=/`, `HttpOnly`, `SameSite=Lax`, and `Secure` on TLS connections.
+
 ## TLS
 
 Native HTTPS is enabled with `./build.sh -tls`.
@@ -156,7 +171,8 @@ English source text is the fallback. The installed file is `share/syphax_web/tra
 ## Common API
 
 - HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
-- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
+- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_get_cookie`, `sw_http_set_cookie`, `sw_http_clear_cookie`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
+- Sessions: `sw_sessions_create`, `sw_sessions_start`, `sw_session_get`, `sw_session_set`, `sw_sessions_end`, `sw_sessions_destroy`
 - JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
 - Utility: `sw_matches_query`
 

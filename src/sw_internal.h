@@ -114,6 +114,7 @@ struct sw_connection {
     sw_char_array read_buffer;
     sw_char_array write_buffer;
     sw_http_header_array header_storage;
+    sw_http_header_array response_headers;
     sw_http_message request;
     b8 request_ready;
     b8 headers_complete;

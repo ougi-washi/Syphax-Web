@@ -127,9 +127,13 @@ static void reply_items(sw_connection* connection, const app_state* state, const
     sw_buffer_free(h);
 }
 
-static void render_home(sw_connection* connection, const app_state* state) {
+static void render_home(sw_connection* connection, const app_state* state, const sw_http_message* request) {
     const c8* lang = current_language_code(state != NULL ? state->translator : NULL);
+    c8 seen[8];
     sw_buffer* h = sw_buffer_new();
+
+    (void)sw_http_get_cookie(request, "sw_queue_seen", seen, sizeof(seen));
+    (void)sw_http_set_cookie(connection, "sw_queue_seen", "1", NULL);
 
     sw_buffer_set_translator(h, state != NULL ? state->translator : NULL);
     sw_html(h, sw_attrs(), {
@@ -146,6 +150,9 @@ static void render_home(sw_connection* connection, const app_state* state) {
                     sw_h1(h, sw_attrs(), { sw_text(h, "Interactive work queue"); });
                     sw_p(h, sw_attrs(sw_attr("class", "lead")), {
                         sw_text(h, "The handler reads query strings and form bodies, updates process memory, and returns partial HTML.");
+                    });
+                    sw_span(h, sw_attrs(sw_attr("class", "pill success")), {
+                        sw_text(h, seen[0] != '\0' ? "Welcome back" : "First visit");
                     });
                 });
 
@@ -243,7 +250,7 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
     }
     if (sw_http_is(request, "GET", "/")) {
         use_query_language(state != NULL ? state->translator : NULL, request);
-        render_home(connection, state);
+        render_home(connection, state, request);
         return;
     }
     if (sw_http_is(request, "GET", "/items")) {

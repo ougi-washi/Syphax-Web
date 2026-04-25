@@ -41,6 +41,7 @@
 typedef struct {
     const c8* docroot;
     const c8* file_name;
+    sw_sessions* sessions;
     int request_count;
 } sw_test_server_state;
 
@@ -287,6 +288,51 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
         return;
     }
 
+    if (sw_http_is(request, "GET", "/cookies")) {
+        char theme[32];
+        char quoted[64];
+        sw_http_cookie strict_cookie = sw_http_cookie_default();
+
+        strict_cookie.same_site = SW_COOKIE_SAMESITE_STRICT;
+        assert(sw_http_get_cookie(request, "theme", theme, sizeof(theme)) >= 0);
+        assert(sw_http_get_cookie(request, "quoted", quoted, sizeof(quoted)) >= 0);
+        assert(sw_http_set_cookie(connection, "seen", "yes", NULL) == 0);
+        assert(sw_http_set_cookie(connection, "mode", "strict", &strict_cookie) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "theme=%s quoted=%s", theme, quoted);
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/clear-cookie")) {
+        assert(sw_http_clear_cookie(connection, "seen", NULL) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "cleared");
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/session")) {
+        sw_session* session;
+        const c8* hits_text;
+        i32 hits;
+        char hits_buffer[32];
+
+        assert(state->sessions != NULL);
+        session = sw_sessions_start(state->sessions, connection, request);
+        assert(session != NULL);
+        hits_text = sw_session_get(session, "hits");
+        hits = hits_text != NULL ? atoi(hits_text) : 0;
+        hits += 1;
+        assert(snprintf(hits_buffer, sizeof(hits_buffer), "%d", hits) > 0);
+        assert(sw_session_set(session, "hits", hits_buffer) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "id=%s hits=%d", sw_session_id(session), hits);
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/session-end")) {
+        assert(state->sessions != NULL);
+        assert(sw_sessions_end(state->sessions, connection, request) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "ended");
+        return;
+    }
+
     if (sw_http_is(request, "GET", "/file")) {
         assert(sw_http_serve_path(connection, state->docroot, state->file_name) == 0);
         return;
@@ -340,6 +386,12 @@ static void sw_tls_test_handler(sw_connection* connection, const sw_http_message
             state->saw_secure ? 1 : 0,
             state->alpn,
             request->proto != NULL ? request->proto : "");
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/cookie")) {
+        assert(sw_http_set_cookie(connection, "tls_cookie", "1", NULL) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "cookie");
         return;
     }
 
@@ -723,7 +775,9 @@ static void test_js_short_api(void) {
 
 static void test_request_helpers(void) {
     sw_http_header headers[] = {
-        { "Content-Type", "multipart/form-data; boundary=\"demo\"" }
+        { "Content-Type", "multipart/form-data; boundary=\"demo\"" },
+        { "Cookie", "theme=dark; empty=; quoted=\"light mode\"; encoded=A%2FB" },
+        { "Cookie", "second=two" }
     };
     const c8 multipart_body[] =
         "--demo\r\n"
@@ -741,7 +795,7 @@ static void test_request_helpers(void) {
         .uri = "/upload?q=Jane+Doe&empty=&encoded=A%2FB",
         .proto = "HTTP/1.1",
         .headers = headers,
-        .num_headers = 1,
+        .num_headers = 3,
         .body = "name=Jane+Doe&city=Tokyo",
         .body_len = strlen("name=Jane+Doe&city=Tokyo"),
         .content_length = strlen("name=Jane+Doe&city=Tokyo")
@@ -751,7 +805,7 @@ static void test_request_helpers(void) {
         .uri = "/upload",
         .proto = "HTTP/1.1",
         .headers = headers,
-        .num_headers = 1,
+        .num_headers = 3,
         .body = multipart_body,
         .body_len = sizeof(multipart_body) - 1,
         .content_length = sizeof(multipart_body) - 1
@@ -775,6 +829,18 @@ static void test_request_helpers(void) {
     assert(sw_http_get_form(&message, "name", value, sizeof(value)) > 0);
     assert(strcmp(value, "Jane Doe") == 0);
     assert(sw_http_get_form(&message, "missing", value, sizeof(value)) == 0);
+    assert(strcmp(value, "") == 0);
+    assert(sw_http_get_cookie(&message, "theme", value, sizeof(value)) > 0);
+    assert(strcmp(value, "dark") == 0);
+    assert(sw_http_get_cookie(&message, "quoted", value, sizeof(value)) > 0);
+    assert(strcmp(value, "light mode") == 0);
+    assert(sw_http_get_cookie(&message, "empty", value, sizeof(value)) == 0);
+    assert(strcmp(value, "") == 0);
+    assert(sw_http_get_cookie(&message, "encoded", value, sizeof(value)) > 0);
+    assert(strcmp(value, "A%2FB") == 0);
+    assert(sw_http_get_cookie(&message, "second", value, sizeof(value)) > 0);
+    assert(strcmp(value, "two") == 0);
+    assert(sw_http_get_cookie(&message, "missing", value, sizeof(value)) == 0);
     assert(strcmp(value, "") == 0);
     memset(&part, 0, sizeof(part));
     assert(sw_http_next_multipart(&multipart_message, &part, &offset) == 1);
@@ -1083,6 +1149,39 @@ static void assert_complete_response(const sw_test_response* response) {
     assert(response_content_length(response) == response_body_size(response));
 }
 
+static void response_cookie_value(const sw_test_response* response, const char* name, char* out, sz out_len) {
+    const char* cursor = response->data;
+    const sz name_len = strlen(name);
+
+    assert(out != NULL);
+    assert(out_len > 0);
+    out[0] = '\0';
+
+    while ((cursor = strstr(cursor, "Set-Cookie: ")) != NULL) {
+        const char* value_begin = cursor + strlen("Set-Cookie: ");
+        const char* equals = strchr(value_begin, '=');
+        const char* value_end;
+        sz value_len;
+
+        if (equals != NULL && (sz)(equals - value_begin) == name_len && strncmp(value_begin, name, name_len) == 0) {
+            value_begin = equals + 1;
+            value_end = strchr(value_begin, ';');
+            if (value_end == NULL) {
+                value_end = strstr(value_begin, "\r\n");
+            }
+            assert(value_end != NULL);
+            value_len = (sz)(value_end - value_begin);
+            assert(value_len + 1 < out_len);
+            memcpy(out, value_begin, value_len);
+            out[value_len] = '\0';
+            return;
+        }
+        cursor = value_begin;
+    }
+
+    assert(!"missing Set-Cookie header");
+}
+
 #if defined(SYPHAX_WEB_HAS_TLS)
 static b8 sw_test_ssl_wants_retry(SSL* ssl, int rc) {
     const int err = SSL_get_error(ssl, rc);
@@ -1251,6 +1350,7 @@ static void test_live_server(void) {
 
     state.docroot = docroot_path;
     state.file_name = file_name;
+    state.sessions = NULL;
     state.request_count = 0;
 
     listen_rc = sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state);
@@ -1340,6 +1440,94 @@ static void test_live_server(void) {
     rmdir(docroot_path);
 #endif
     sw_mgr_destroy(mgr);
+}
+
+static void test_cookie_helpers(void) {
+    sw_mgr* mgr = sw_mgr_create(NULL);
+    sw_test_server_state state = {0};
+    u16 port;
+    sw_test_response response;
+
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    response = issue_request(mgr, port,
+        "GET /cookies HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: theme=dark; empty=; quoted=\"light mode\"\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "theme=dark quoted=light mode") != NULL);
+    assert(strstr(response.data, "Set-Cookie: seen=yes; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    assert(strstr(response.data, "Set-Cookie: mode=strict; Path=/; HttpOnly; SameSite=Strict") != NULL);
+    assert(strstr(response.data, "Set-Cookie: seen=yes; Path=/; Secure") == NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /clear-cookie HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Set-Cookie: seen=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    free(response.data);
+
+    sw_mgr_destroy(mgr);
+}
+
+static void test_session_helpers(void) {
+    sw_session_config config = sw_session_config_default();
+    sw_mgr* mgr = sw_mgr_create(NULL);
+    sw_test_server_state state = {0};
+    u16 port;
+    sw_test_response response;
+    char session_id[128];
+    char request[512];
+
+    config.cookie_name = "sid";
+    config.ttl_seconds = 60;
+    config.max_sessions = 2;
+    config.max_items = 2;
+    state.sessions = sw_sessions_create(&config);
+
+    assert(mgr != NULL);
+    assert(state.sessions != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    response = issue_request(mgr, port, "GET /session HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "hits=1") != NULL);
+    assert(strstr(response.data, "Set-Cookie: sid=") != NULL);
+    assert(strstr(response.data, "; Max-Age=60; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    response_cookie_value(&response, "sid", session_id, sizeof(session_id));
+    assert(strlen(session_id) == 64);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /session HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: sid=%s\r\n"
+        "\r\n",
+        session_id) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "hits=2") != NULL);
+    assert(strstr(response.data, session_id) != NULL);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /session-end HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: sid=%s\r\n"
+        "\r\n",
+        session_id) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Set-Cookie: sid=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    free(response.data);
+
+    sw_mgr_destroy(mgr);
+    sw_sessions_destroy(state.sessions);
 }
 
 static void test_server_config(void) {
@@ -1486,6 +1674,18 @@ static void test_tls_support(void) {
         assert(strcmp(state.alpn, "http/1.1") == 0);
         free(response.data);
 
+        response = issue_tls_request(mgr, port,
+            "GET /cookie HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "\r\n",
+            NULL,
+            0,
+            NULL,
+            0);
+        assert(sw_test_response_has_complete_body(&response));
+        assert(strstr(response.data, "Set-Cookie: tls_cookie=1; Path=/; Secure; HttpOnly; SameSite=Lax") != NULL);
+        free(response.data);
+
         remove(cert_path);
         remove(key_path);
     }
@@ -1514,6 +1714,8 @@ static const sw_named_test sw_named_tests[] = {
     { "request_helpers", test_request_helpers },
     { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server },
+    { "cookie_helpers", test_cookie_helpers },
+    { "session_helpers", test_session_helpers },
     { "server_config", test_server_config },
     { "tls_support", test_tls_support }
 };
