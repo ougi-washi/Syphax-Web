@@ -14,6 +14,14 @@
 
 #define COUNT_OF(_items) (sizeof(_items) / sizeof((_items)[0]))
 
+static const sw_language example_languages[] = {
+    { "en", "EN", SW_LANGUAGE_DIRECTION_LTR },
+    { "ar", "AR", SW_LANGUAGE_DIRECTION_RTL },
+    { "fa", "FA", SW_LANGUAGE_DIRECTION_RTL },
+    { "zh", "ZH", SW_LANGUAGE_DIRECTION_LTR },
+    { "ja", "JP", SW_LANGUAGE_DIRECTION_LTR }
+};
+
 static inline void repo_path(c8* buffer, sz buffer_len, const c8* relative_path) {
     if (buffer == NULL || buffer_len == 0) {
         return;
@@ -27,6 +35,105 @@ static inline void shared_root(c8* buffer, sz buffer_len) {
 
 static inline void advanced_root(c8* buffer, sz buffer_len) {
     repo_path(buffer, buffer_len, "examples/advanced");
+}
+
+static inline void translations_path(c8* buffer, sz buffer_len) {
+    repo_path(buffer, buffer_len, "resources/translations.json");
+}
+
+static inline const c8* example_language_code(const c8* code) {
+    sz i;
+
+    if (code == NULL || code[0] == '\0') {
+        return "en";
+    }
+    if (strcmp(code, "jp") == 0) {
+        return "ja";
+    }
+    for (i = 0; i < COUNT_OF(example_languages); ++i) {
+        if (strcmp(code, example_languages[i].code) == 0) {
+            return example_languages[i].code;
+        }
+    }
+    return "en";
+}
+
+static inline sw_translator* example_translator(void) {
+    c8 path[1024];
+    sw_translator* translator;
+    sz i;
+
+    translations_path(path, sizeof(path));
+    translator = sw_translator_create(path,
+        .code = "en",
+        .label = "English",
+        .direction = SW_LANGUAGE_DIRECTION_LTR
+    );
+    if (translator == NULL) {
+        return NULL;
+    }
+
+    for (i = 1; i < COUNT_OF(example_languages); ++i) {
+        (void)sw_translator_add(translator,
+            .code = example_languages[i].code,
+            .label = example_languages[i].label,
+            .direction = example_languages[i].direction
+        );
+    }
+    return translator;
+}
+
+static inline void use_language(sw_translator* translator, const c8* code) {
+    if (translator == NULL) {
+        return;
+    }
+    if (!sw_translator_set_language(translator, example_language_code(code))) {
+        (void)sw_translator_set_language(translator, "en");
+    }
+}
+
+static inline void use_query_language(sw_translator* translator, const sw_http_message* request) {
+    c8 code[16];
+
+    (void)sw_http_get_query(request, "lang", code, sizeof(code));
+    use_language(translator, code);
+}
+
+static inline void use_form_language(sw_translator* translator, const sw_http_message* request) {
+    c8 code[16];
+
+    (void)sw_http_get_form(request, "lang", code, sizeof(code));
+    use_language(translator, code);
+}
+
+static inline const c8* current_language_code(const sw_translator* translator) {
+    const sw_language* language = sw_translator_get_language(translator);
+
+    return (language != NULL && language->code != NULL) ? language->code : "en";
+}
+
+static inline void language_url(c8* buffer, sz buffer_len, const c8* path, const c8* code) {
+    (void)snprintf(buffer, buffer_len, "%s?lang=%s",
+        (path != NULL && path[0] != '\0') ? path : "/",
+        (code != NULL && code[0] != '\0') ? code : "en");
+}
+
+static inline void render_language_links(sw_buffer* h, const c8* path, const c8* active_code) {
+    sz i;
+    const c8* active_language = example_language_code(active_code);
+
+    for (i = 0; i < COUNT_OF(example_languages); ++i) {
+        c8 href[128];
+        const b8 active = strcmp(active_language, example_languages[i].code) == 0;
+
+        language_url(href, sizeof(href), path, example_languages[i].code);
+        sw_a(h, sw_attrs(
+            sw_attr("href", href),
+            sw_attr("class", active ? "is-active" : "")
+        ), {
+            sw_text_no_translate(h, example_languages[i].label);
+        });
+    }
 }
 
 static inline b8 file_exists(const c8* path) {

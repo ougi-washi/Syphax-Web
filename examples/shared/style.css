@@ -219,6 +219,11 @@ pre code{
   background:#202329;
 }
 
+.nav a.is-active{
+  border-color:var(--border-strong);
+  color:var(--success);
+}
+
 .nav a:focus-visible,
 .button:focus-visible{
   outline:none;

@@ -9,6 +9,7 @@ typedef struct {
 } work_item;
 
 typedef struct {
+    sw_translator* translator;
     work_item items[16];
     sz item_count;
 } app_state;
@@ -30,13 +31,20 @@ static void seed_items(app_state* state) {
     copy_text(state->items[2].severity, sizeof(state->items[2].severity), "Low");
 }
 
-static b8 item_matches(const work_item* item, const c8* query) {
+static b8 field_matches(const sw_translator* translator, const c8* value, const c8* query) {
+    const c8* translated = sw_translate(translator, value);
+
+    return sw_matches_query(value, query, 0)
+        || (translated != value && sw_matches_query(translated, query, 0));
+}
+
+static b8 item_matches(const work_item* item, const c8* query, const sw_translator* translator) {
     if (query == NULL || query[0] == '\0') {
         return 1;
     }
-    return sw_matches_query(item->name, query, 0)
-        || sw_matches_query(item->owner, query, 0)
-        || sw_matches_query(item->severity, query, 0);
+    return field_matches(translator, item->name, query)
+        || field_matches(translator, item->owner, query)
+        || field_matches(translator, item->severity, query);
 }
 
 static void render_items(sw_buffer* h, const app_state* state, const c8* query, const c8* message) {
@@ -60,7 +68,7 @@ static void render_items(sw_buffer* h, const app_state* state, const c8* query, 
             for (i = 0; state != NULL && i < state->item_count; ++i) {
                 const work_item* item = &state->items[i];
 
-                if (!item_matches(item, query)) {
+                if (!item_matches(item, query, state->translator)) {
                     continue;
                 }
                 visible_count += 1;
@@ -113,20 +121,26 @@ static void add_item(app_state* state, const sw_http_message* request, c8* messa
 static void reply_items(sw_connection* connection, const app_state* state, const c8* query, const c8* message) {
     sw_buffer* h = sw_buffer_new();
 
+    sw_buffer_set_translator(h, state != NULL ? state->translator : NULL);
     render_items(h, state, query, message);
     (void)sw_http_reply(connection, 200, "text/html; charset=utf-8", sw_buffer_data(h), sw_buffer_len(h));
     sw_buffer_free(h);
 }
 
 static void render_home(sw_connection* connection, const app_state* state) {
+    const c8* lang = current_language_code(state != NULL ? state->translator : NULL);
     sw_buffer* h = sw_buffer_new();
 
-    sw_html(h, sw_attrs(sw_attr("lang", "en")), {
+    sw_buffer_set_translator(h, state != NULL ? state->translator : NULL);
+    sw_html(h, sw_attrs(), {
         sw_head(h, sw_attrs(), {
             render_head(h, "Syphax-Web Live Queue");
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell wide")), {
+                sw_nav(h, sw_attrs(sw_attr("class", "nav")), {
+                    render_language_links(h, "/", lang);
+                });
                 sw_section(h, sw_attrs(sw_attr("class", "hero compact")), {
                     sw_span(h, sw_attrs(sw_attr("class", "kicker secure")), { sw_text(h, "Live HTTPS"); });
                     sw_h1(h, sw_attrs(), { sw_text(h, "Interactive work queue"); });
@@ -142,6 +156,11 @@ static void render_home(sw_connection* connection, const app_state* state) {
                         sw_attr("method", "post"),
                         sw_attr("action", "/items")
                     ), {
+                        sw_input(h, sw_attrs(
+                            sw_attr("name", "lang"),
+                            sw_attr("type", "hidden"),
+                            sw_attr("value", lang)
+                        ));
                         sw_h2(h, sw_attrs(), { sw_text(h, "Add Item"); });
                         sw_label(h, sw_attrs(sw_attr("class", "field")), {
                             sw_span(h, sw_attrs(), { sw_text(h, "Name"); });
@@ -170,6 +189,11 @@ static void render_home(sw_connection* connection, const app_state* state) {
                         sw_attr("method", "get"),
                         sw_attr("action", "/items")
                     ), {
+                        sw_input(h, sw_attrs(
+                            sw_attr("name", "lang"),
+                            sw_attr("type", "hidden"),
+                            sw_attr("value", lang)
+                        ));
                         sw_h2(h, sw_attrs(), { sw_text(h, "Filter"); });
                         sw_label(h, sw_attrs(sw_attr("class", "field")), {
                             sw_span(h, sw_attrs(), { sw_text(h, "Query"); });
@@ -218,15 +242,18 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
         return;
     }
     if (sw_http_is(request, "GET", "/")) {
+        use_query_language(state != NULL ? state->translator : NULL, request);
         render_home(connection, state);
         return;
     }
     if (sw_http_is(request, "GET", "/items")) {
+        use_query_language(state != NULL ? state->translator : NULL, request);
         (void)sw_http_get_query(request, "q", query, sizeof(query));
         reply_items(connection, state, query, NULL);
         return;
     }
     if (sw_http_is(request, "POST", "/items")) {
+        use_form_language(state != NULL ? state->translator : NULL, request);
         add_item(state, request, message, sizeof(message));
         reply_items(connection, state, "", message);
         return;
@@ -238,14 +265,22 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 int main(void) {
     sw_http_config config = http_config();
     app_state state;
+    i32 rc;
 
     memset(&state, 0, sizeof(state));
+    state.translator = example_translator();
+    if (state.translator == NULL) {
+        fprintf(stderr, "Failed to load translations.\n");
+        return 1;
+    }
     seed_items(&state);
-    return listen_https(
+    rc = listen_https(
         "https://127.0.0.1:8445",
         &config,
         handle_request,
         &state,
         "Syphax-Web live queue example"
     );
+    sw_translator_destroy(state.translator);
+    return rc;
 }

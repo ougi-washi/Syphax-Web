@@ -11,6 +11,10 @@ typedef struct {
     const c8* body;
 } card;
 
+typedef struct {
+    sw_translator* translator;
+} app_state;
+
 static const metric metrics[] = {
     { "Routes", "5", "HTML, JSON, text, and CSS responses" },
     { "Mode", "TLS", "OpenSSL-backed HTTPS listener" },
@@ -23,12 +27,20 @@ static const card cards[] = {
     { "Asset Boundary", "Public files are served through sw_http_serve_path with a fixed docroot." }
 };
 
-static void render_nav(sw_buffer* h) {
+static void render_nav_link(sw_buffer* h, const c8* path, const c8* label, const c8* lang) {
+    c8 href[128];
+
+    language_url(href, sizeof(href), path, lang);
+    sw_a(h, sw_attrs(sw_attr("href", href)), { sw_text(h, label); });
+}
+
+static void render_nav(sw_buffer* h, const c8* current_path, const c8* lang) {
     sw_nav(h, sw_attrs(sw_attr("class", "nav")), {
-        sw_a(h, sw_attrs(sw_attr("href", "/")), { sw_text(h, "Overview"); });
-        sw_a(h, sw_attrs(sw_attr("href", "/report")), { sw_text(h, "Report"); });
-        sw_a(h, sw_attrs(sw_attr("href", "/status.json")), { sw_text(h, "JSON"); });
-        sw_a(h, sw_attrs(sw_attr("href", "/about.txt")), { sw_text(h, "Text"); });
+        render_nav_link(h, "/", "Overview", lang);
+        render_nav_link(h, "/report", "Report", lang);
+        render_nav_link(h, "/status.json", "JSON", lang);
+        render_nav_link(h, "/about.txt", "Text", lang);
+        render_language_links(h, current_path, lang);
     });
 }
 
@@ -46,17 +58,25 @@ static void render_metrics(sw_buffer* h) {
     });
 }
 
-static void render_page(sw_connection* connection, const c8* title, b8 report_page) {
+static void render_page(
+    sw_connection* connection,
+    sw_translator* translator,
+    const c8* title,
+    const c8* path,
+    b8 report_page
+) {
     sz i;
+    const c8* lang = current_language_code(translator);
     sw_buffer* h = sw_buffer_new();
 
-    sw_html(h, sw_attrs(sw_attr("lang", "en")), {
+    sw_buffer_set_translator(h, translator);
+    sw_html(h, sw_attrs(), {
         sw_head(h, sw_attrs(), {
             render_head(h, title);
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell wide")), {
-                render_nav(h);
+                render_nav(h, path, lang);
                 sw_section(h, sw_attrs(sw_attr("class", "hero compact")), {
                     sw_span(h, sw_attrs(sw_attr("class", "kicker secure")), { sw_text(h, "Static HTTPS"); });
                     sw_h1(h, sw_attrs(), { sw_text(h, title); });
@@ -112,17 +132,20 @@ static void render_page(sw_connection* connection, const c8* title, b8 report_pa
 }
 
 static void handle_request(sw_connection* connection, const sw_http_message* request, void* user_data) {
-    (void)user_data;
+    app_state* state = (app_state*)user_data;
+    sw_translator* translator = state != NULL ? state->translator : NULL;
 
     if (serve_style(connection, request)) {
         return;
     }
     if (sw_http_is(request, "GET", "/")) {
-        render_page(connection, "Static Site", 0);
+        use_query_language(translator, request);
+        render_page(connection, translator, "Static Site", "/", 0);
         return;
     }
     if (sw_http_is(request, "GET", "/report")) {
-        render_page(connection, "Static Report", 1);
+        use_query_language(translator, request);
+        render_page(connection, translator, "Static Report", "/report", 1);
         return;
     }
     if (sw_http_is(request, "GET", "/status.json")) {
@@ -131,8 +154,10 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
         return;
     }
     if (sw_http_is(request, "GET", "/about.txt")) {
+        use_query_language(translator, request);
         (void)sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
-            "Static HTTPS example served by syphax-web.\n");
+            "%s\n",
+            sw_translate(translator, "Static HTTPS example served by syphax-web."));
         return;
     }
 
@@ -141,12 +166,22 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 
 int main(void) {
     sw_http_config config = http_config();
+    app_state state;
+    i32 rc;
 
-    return listen_https(
+    state.translator = example_translator();
+    if (state.translator == NULL) {
+        fprintf(stderr, "Failed to load translations.\n");
+        return 1;
+    }
+
+    rc = listen_https(
         "https://127.0.0.1:8444",
         &config,
         handle_request,
-        NULL,
+        &state,
         "Syphax-Web static site example"
     );
+    sw_translator_destroy(state.translator);
+    return rc;
 }

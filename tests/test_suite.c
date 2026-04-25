@@ -372,15 +372,15 @@ static void test_translator(void) {
 
     load_fixture_translations(translator);
     assert(sw_translator_set_language(translator, "en"));
-    assert(strcmp(sw_translate(translator, "Search"), "Search") == 0);
+    assert(strcmp(sw_translate(translator, "Queue"), "Queue") == 0);
     assert(sw_translator_set_language(translator, "ja"));
-    assert(strcmp(sw_translate(translator, "Search"), "検索") == 0);
+    assert(strcmp(sw_translate(translator, "Queue"), "キュー") == 0);
     assert(sw_translator_set_language(translator, "ar"));
-    assert(strcmp(sw_translate(translator, "Language"), "اللغة") == 0);
+    assert(strcmp(sw_translate(translator, "Queue"), "قائمة الانتظار") == 0);
     assert(sw_translator_set_language(translator, "fa"));
-    assert(strcmp(sw_translate(translator, "Language"), "زبان") == 0);
+    assert(strcmp(sw_translate(translator, "Queue"), "صف") == 0);
     assert(sw_translator_set_language(translator, "zh"));
-    assert(strcmp(sw_translate(translator, "Language"), "语言") == 0);
+    assert(strcmp(sw_translate(translator, "Queue"), "队列") == 0);
     assert(strcmp(sw_translate(translator, "Unknown"), "Unknown") == 0);
 
     assert(!sw_translator_load_all_json_text(translator, "[\"bad\"]"));
@@ -433,7 +433,7 @@ static void test_translator(void) {
     auto_loaded = sw_translator_create(translations_path, .code = "en", .label = "English", .direction = SW_LANGUAGE_DIRECTION_LTR);
     assert(auto_loaded != NULL);
     assert(sw_translator_set_language(auto_loaded, "ja"));
-    assert(strcmp(sw_translate(auto_loaded, "Search"), "検索") == 0);
+    assert(strcmp(sw_translate(auto_loaded, "Queue"), "キュー") == 0);
     languages = sw_translator_get_languages(auto_loaded, &language_count);
     assert(languages != NULL);
     assert(language_count == 5);
@@ -457,40 +457,40 @@ static void test_html_short_api(void) {
 
     assert(sw_tag(h, "div", sw_attrs(
         sw_attr("class", "shell"),
-        sw_attr("title", "Search"),
-        sw_attr("aria-label", "Search"),
-        (sw_attr_item){ .name = "alt", .value = "Search", .enabled = 1, .no_translate = 1 }
+        sw_attr("title", "Queue"),
+        sw_attr("aria-label", "Queue"),
+        (sw_attr_item){ .name = "alt", .value = "Queue", .enabled = 1, .no_translate = 1 }
     )));
     assert(sw_void(h, "input", sw_attrs(
         sw_attr("type", "text"),
-        sw_attr("placeholder", "Search"),
+        sw_attr("placeholder", "Queue"),
         sw_attr("value", "\"quoted\"")
     )));
-    assert(sw_text(h, "Search"));
-    assert(sw_text_no_translate(h, "Search"));
+    assert(sw_text(h, "Queue"));
+    assert(sw_text_no_translate(h, "Queue"));
     assert(sw_end(h, "div"));
 
-    assert(strstr(sw_buffer_data(h), "title=\"搜索\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "placeholder=\"搜索\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "aria-label=\"搜索\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "alt=\"Search\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "title=\"队列\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "placeholder=\"队列\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "aria-label=\"队列\"") != NULL);
+    assert(strstr(sw_buffer_data(h), "alt=\"Queue\"") != NULL);
     assert(strstr(sw_buffer_data(h), "value=\"&quot;quoted&quot;\"") != NULL);
-    assert(strstr(sw_buffer_data(h), "搜索Search") != NULL);
+    assert(strstr(sw_buffer_data(h), "队列Queue") != NULL);
     assert(strstr(sw_buffer_data(h), "</input>") == NULL);
 
     sw_buffer_reset(h);
     assert(sw_buffer_translation_enabled(h));
     sw_translate_off(h);
     assert(!sw_buffer_translation_enabled(h));
-    assert(sw_tag(h, "div", sw_attrs(sw_attr("title", "Search"))));
-    assert(sw_text(h, "Search"));
+    assert(sw_tag(h, "div", sw_attrs(sw_attr("title", "Queue"))));
+    assert(sw_text(h, "Queue"));
     sw_translate_on(h);
     assert(sw_buffer_translation_enabled(h));
-    assert(sw_text(h, "Search"));
+    assert(sw_text(h, "Queue"));
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
-    assert(strstr(html, "title=\"Search\"") != NULL);
-    assert(strstr(html, ">Search搜索</div>") != NULL);
+    assert(strstr(html, "title=\"Queue\"") != NULL);
+    assert(strstr(html, ">Queue队列</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "HTML", sw_attrs()));
@@ -510,29 +510,29 @@ static void test_html_short_api(void) {
     assert(sw_translator_set_language(translator, "zh"));
     assert(sw_tag(h, "div", sw_attrs(
         sw_attr_translation(0),
-        sw_attr("title", "Search")
+        sw_attr("title", "Queue")
     )));
-    assert(sw_text(h, "Search"));
+    assert(sw_text(h, "Queue"));
     assert(sw_tag(h, "span", sw_attrs(
         sw_attr_translation(1),
-        sw_attr("title", "Search")
+        sw_attr("title", "Queue")
     )));
-    assert(sw_text(h, "Search"));
+    assert(sw_text(h, "Queue"));
     assert(sw_end(h, "span"));
-    assert(sw_text(h, "Search"));
+    assert(sw_text(h, "Queue"));
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
-    assert(strstr(html, "<div title=\"Search\">Search<span title=\"搜索\">搜索</span>Search</div>") != NULL);
+    assert(strstr(html, "<div title=\"Queue\">Queue<span title=\"队列\">队列</span>Queue</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "div", sw_attrs(
         sw_attr("style", "border-color:currentColor"),
         sw_attr_direction(SW_LANGUAGE_DIRECTION_TTB)
     )));
-    assert(sw_text(h, "Search"));
+    assert(sw_text(h, "Queue"));
     assert(sw_end(h, "div"));
     html = sw_buffer_data(h);
-    assert(strstr(html, "<div dir=\"ltr\" data-sw-direction=\"ttb\" style=\"border-color:currentColor;writing-mode:vertical-rl;text-orientation:mixed;\">搜索</div>") != NULL);
+    assert(strstr(html, "<div dir=\"ltr\" data-sw-direction=\"ttb\" style=\"border-color:currentColor;writing-mode:vertical-rl;text-orientation:mixed;\">队列</div>") != NULL);
 
     sw_buffer_reset(h);
     assert(sw_tag(h, "section", sw_attrs()));
@@ -569,23 +569,23 @@ static void test_html_short_macros(void) {
     assert(sw_translator_set_language(translator, "zh"));
     sw_buffer_set_translator(h, translator);
 
-    assert(sw_title(h, "Search"));
-    assert(sw_title_no_translate(h, "Search"));
+    assert(sw_title(h, "Queue"));
+    assert(sw_title_no_translate(h, "Queue"));
     sw_section(h, sw_attrs(
         sw_attr("class", "shell"),
         sw_attr("data-mode", "demo"),
-        sw_attr("data-label", "Search"),
+        sw_attr("data-label", "Queue"),
         sw_attr_bool("hidden", 1),
         sw_attr_bool("selected", 1)
     ), {
         sw_input(h, sw_attrs(
             sw_attr("type", "text"),
-            sw_attr("placeholder", "Search"),
+            sw_attr("placeholder", "Queue"),
             sw_attr("data-role", "search"),
             sw_attr_bool("disabled", 1)
         ));
-        sw_text(h, "Search");
-        sw_text_no_translate(h, "Search");
+        sw_text(h, "Queue");
+        sw_text_no_translate(h, "Queue");
     });
     sw_div(h, sw_attrs(), {
         sw_a(h, sw_attrs(sw_attr_no_translate("href", "/docs")), {
@@ -600,18 +600,18 @@ static void test_html_short_macros(void) {
     });
 
     html = sw_buffer_data(h);
-    assert(strstr(html, "<title>搜索</title>") != NULL);
-    assert(strstr(html, "<title>Search</title>") != NULL);
+    assert(strstr(html, "<title>队列</title>") != NULL);
+    assert(strstr(html, "<title>Queue</title>") != NULL);
     assert(strstr(html, "data-mode=\"demo\"") != NULL);
-    assert(strstr(html, "data-label=\"Search\"") != NULL);
-    assert(strstr(html, "placeholder=\"搜索\"") != NULL);
+    assert(strstr(html, "data-label=\"Queue\"") != NULL);
+    assert(strstr(html, "placeholder=\"队列\"") != NULL);
     assert(strstr(html, "data-role=\"search\"") != NULL);
     assert(strstr(html, "hidden") != NULL);
     assert(strstr(html, "selected") != NULL);
     assert(strstr(html, "disabled") != NULL);
     assert(strstr(html, "</input>") == NULL);
-    assert(strstr(html, "搜索Search") != NULL);
-    assert(strstr(html, "<a href=\"/docs\">Docs</a>") != NULL);
+    assert(strstr(html, "队列Queue") != NULL);
+    assert(strstr(html, "<a href=\"/docs\">文档</a>") != NULL);
     assert(strstr(html, "<button type=\"button\">Open</button>") != NULL);
     assert(strstr(html, "<custom-card data-role=\"demo\">Custom</custom-card>") != NULL);
 
