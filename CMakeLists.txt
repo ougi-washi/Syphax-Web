@@ -21,6 +21,8 @@ option(SYPHAX_WEB_BUILD_STRESS "Build syphax-web stress tools" OFF)
 option(SYPHAX_WEB_ENABLE_WARNINGS "Enable compiler warnings" ON)
 option(SYPHAX_WEB_ENABLE_TLS "Enable OpenSSL-backed TLS support" OFF)
 option(SYPHAX_WEB_ENABLE_CRYPTO "Enable OpenSSL-backed encrypted token support" OFF)
+option(SYPHAX_WEB_ENABLE_SQLITE "Enable SQLite database support" OFF)
+option(SYPHAX_WEB_ENABLE_POSTGRES "Enable PostgreSQL database support" OFF)
 
 set(SYPHAX_WEB_RUNTIME_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
@@ -55,11 +57,13 @@ set(SYPHAX_WEB_PUBLIC_HEADERS
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_translator.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_html.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_js.h
+    ${SYPHAX_WEB_INCLUDE_DIR}/sw_db.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_server.h
 )
 
 set(SYPHAX_WEB_PRIVATE_HEADERS
     ${SYPHAX_WEB_SRC_DIR}/sw_backend.h
+    ${SYPHAX_WEB_SRC_DIR}/sw_db_internal.h
     ${SYPHAX_WEB_SRC_DIR}/sw_internal.h
 )
 
@@ -78,6 +82,9 @@ set(SYPHAX_WEB_SOURCES
     ${SYPHAX_WEB_SRC_DIR}/sw_translator.c
     ${SYPHAX_WEB_SRC_DIR}/sw_html.c
     ${SYPHAX_WEB_SRC_DIR}/sw_js.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_db.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_db_sqlite.c
+    ${SYPHAX_WEB_SRC_DIR}/sw_db_postgres.c
     ${SYPHAX_WEB_SRC_DIR}/sw_server.c
 )
 
@@ -128,6 +135,22 @@ if(SYPHAX_WEB_ENABLE_TLS)
     target_compile_definitions(syphax_web PUBLIC SYPHAX_WEB_HAS_TLS)
 endif()
 
+if(SYPHAX_WEB_ENABLE_SQLITE)
+    find_package(SQLite3 REQUIRED)
+    if(TARGET SQLite3::SQLite3)
+        target_link_libraries(syphax_web PUBLIC SQLite3::SQLite3)
+    else()
+        target_link_libraries(syphax_web PUBLIC SQLite::SQLite3)
+    endif()
+    target_compile_definitions(syphax_web PUBLIC SYPHAX_WEB_HAS_SQLITE)
+endif()
+
+if(SYPHAX_WEB_ENABLE_POSTGRES)
+    find_package(PostgreSQL REQUIRED)
+    target_link_libraries(syphax_web PUBLIC PostgreSQL::PostgreSQL)
+    target_compile_definitions(syphax_web PUBLIC SYPHAX_WEB_HAS_POSTGRES)
+endif()
+
 syphax_web_enable_target_warnings(syphax_web)
 
 set_target_properties(syphax_web PROPERTIES
@@ -160,6 +183,9 @@ if(SYPHAX_WEB_BUILD_EXAMPLES)
     syphax_web_add_example(example_04_live_queue examples/04_live_queue.c 04_live_queue)
     syphax_web_add_example(example_05_folder_app examples/05_folder_app.c 05_folder_app)
     syphax_web_add_example(example_06_session_login examples/06_session_login.c 06_session_login)
+    if(SYPHAX_WEB_ENABLE_SQLITE OR SYPHAX_WEB_ENABLE_POSTGRES)
+        syphax_web_add_example(example_07_database examples/07_database.c 07_database)
+    endif()
 endif()
 
 if(SYPHAX_WEB_BUILD_STRESS AND NOT WIN32)
@@ -200,6 +226,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     add_test(NAME syphax_web_tests_server_keep_alive_and_limits COMMAND syphax_web_tests server_keep_alive_and_limits)
     add_test(NAME syphax_web_tests_server_loop_shards COMMAND syphax_web_tests server_loop_shards)
     add_test(NAME syphax_web_tests_tls_support COMMAND syphax_web_tests tls_support)
+    add_test(NAME syphax_web_tests_database_helpers COMMAND syphax_web_tests database_helpers)
     if(SYPHAX_WEB_BUILD_STRESS AND NOT WIN32)
         add_test(NAME syphax_web_stress_short COMMAND server_stress --mode short --workers 2 --requests 50 --connections 16)
         add_test(NAME syphax_web_stress_idle COMMAND server_stress --mode idle --workers 2 --connections 16 --ms 50)

@@ -8,6 +8,8 @@ set "build_dir="
 set "clean=0"
 set "tls=0"
 set "crypto=0"
+set "sqlite=0"
+set "postgres=0"
 set "cmake_args="
 
 :parse_args
@@ -23,6 +25,16 @@ if /I "!arg!"=="-crypto" set "crypto=1" & shift & goto parse_args
 if /I "!arg!"=="--crypto" set "crypto=1" & shift & goto parse_args
 if /I "!arg!"=="-no-crypto" set "crypto=0" & shift & goto parse_args
 if /I "!arg!"=="--no-crypto" set "crypto=0" & shift & goto parse_args
+if /I "!arg!"=="-sqlite" set "sqlite=1" & shift & goto parse_args
+if /I "!arg!"=="--sqlite" set "sqlite=1" & shift & goto parse_args
+if /I "!arg!"=="-no-sqlite" set "sqlite=0" & shift & goto parse_args
+if /I "!arg!"=="--no-sqlite" set "sqlite=0" & shift & goto parse_args
+if /I "!arg!"=="-postgres" set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="--postgres" set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="-no-postgres" set "postgres=0" & shift & goto parse_args
+if /I "!arg!"=="--no-postgres" set "postgres=0" & shift & goto parse_args
+if /I "!arg!"=="-db" set "sqlite=1" & set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="--db" set "sqlite=1" & set "postgres=1" & shift & goto parse_args
 if /I "!arg!"=="-debug" set "build_type=Debug" & shift & goto parse_args
 if /I "!arg!"=="--debug" set "build_type=Debug" & shift & goto parse_args
 if /I "!arg!"=="-release" set "build_type=Release" & shift & goto parse_args
@@ -45,6 +57,18 @@ if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=TRUE" set "crypto=1" & shift & goto p
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=OFF" set "crypto=0" & shift & goto parse_args
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=0" set "crypto=0" & shift & goto parse_args
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=FALSE" set "crypto=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=ON" set "sqlite=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=1" set "sqlite=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=TRUE" set "sqlite=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=OFF" set "sqlite=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=0" set "sqlite=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_SQLITE=FALSE" set "sqlite=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=ON" set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=1" set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=TRUE" set "postgres=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=OFF" set "postgres=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=0" set "postgres=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_POSTGRES=FALSE" set "postgres=0" & shift & goto parse_args
 if "!arg:~0,2!"=="-D" set "cmake_args=!cmake_args! !arg!" & shift & goto parse_args
 echo error: unknown option: !arg!
 echo Run build.bat --help for usage.
@@ -71,10 +95,22 @@ if "%build_dir%"=="" (
   if "%tls%"=="1" (
     set "build_dir=build-tls"
   ) else (
-    if "%crypto%"=="1" (
-      set "build_dir=build-crypto"
+    if "%sqlite%"=="1" (
+      if "%postgres%"=="1" (
+        set "build_dir=build-db"
+      ) else (
+        set "build_dir=build-sqlite"
+      )
     ) else (
-      set "build_dir=build"
+      if "%postgres%"=="1" (
+        set "build_dir=build-postgres"
+      ) else (
+        if "%crypto%"=="1" (
+          set "build_dir=build-crypto"
+        ) else (
+          set "build_dir=build"
+        )
+      )
     )
   )
 )
@@ -89,6 +125,16 @@ if "%crypto%"=="1" (
 ) else (
   set "crypto_value=OFF"
 )
+if "%sqlite%"=="1" (
+  set "sqlite_value=ON"
+) else (
+  set "sqlite_value=OFF"
+)
+if "%postgres%"=="1" (
+  set "postgres_value=ON"
+) else (
+  set "postgres_value=OFF"
+)
 
 if not exist "lib\syphax\s_array.h" (
   git submodule update --init --recursive
@@ -101,7 +147,7 @@ if "%clean%"=="1" (
 
 if not exist bin mkdir bin
 set "bin_marker=bin\.syphax_web_active_build"
-set "bin_config=build_dir=%build_dir%;build_type=%build_type%;tls=%tls_value%;crypto=%crypto_value%;cmake_args=%cmake_args%"
+set "bin_config=build_dir=%build_dir%;build_type=%build_type%;tls=%tls_value%;crypto=%crypto_value%;sqlite=%sqlite_value%;postgres=%postgres_value%;cmake_args=%cmake_args%"
 set "previous_bin_config="
 if exist "%bin_marker%" set /p previous_bin_config=<"%bin_marker%"
 
@@ -110,11 +156,11 @@ if not "%previous_bin_config%"=="%bin_config%" goto refresh_bin
 goto configure
 
 :refresh_bin
-echo Refreshing shared bin outputs for %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%)
-del /q "bin\01_http.exe" "bin\02_https.exe" "bin\03_static_site.exe" "bin\04_live_queue.exe" "bin\05_folder_app.exe" "bin\06_session_login.exe" "bin\syphax_web_tests.exe" >nul 2>nul
+echo Refreshing shared bin outputs for %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%, SQLITE=%sqlite_value%, POSTGRES=%postgres_value%)
+del /q "bin\01_http.exe" "bin\02_https.exe" "bin\03_static_site.exe" "bin\04_live_queue.exe" "bin\05_folder_app.exe" "bin\06_session_login.exe" "bin\07_database.exe" "bin\syphax_web_tests.exe" >nul 2>nul
 
 :configure
-echo Configuring %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%)
+echo Configuring %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%, SQLITE=%sqlite_value%, POSTGRES=%postgres_value%)
 cmake -S . -B "%build_dir%" ^
   -DCMAKE_BUILD_TYPE="%build_type%" ^
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
@@ -122,6 +168,8 @@ cmake -S . -B "%build_dir%" ^
   -DSYPHAX_WEB_BUILD_TESTS=ON ^
   -DSYPHAX_WEB_ENABLE_TLS="%tls_value%" ^
   -DSYPHAX_WEB_ENABLE_CRYPTO="%crypto_value%" ^
+  -DSYPHAX_WEB_ENABLE_SQLITE="%sqlite_value%" ^
+  -DSYPHAX_WEB_ENABLE_POSTGRES="%postgres_value%" ^
   %cmake_args%
 if errorlevel 1 exit /b 1
 
@@ -141,6 +189,14 @@ echo   -no-tls, --no-tls    Build without TLS. Uses build by default.
 echo   -crypto, --crypto    Build with OpenSSL encrypted token support. Uses build-crypto by default.
 echo   -no-crypto, --no-crypto
 echo                         Build without encrypted token support unless TLS is enabled.
+echo   -sqlite, --sqlite    Build with SQLite database support. Uses build-sqlite by default.
+echo   -postgres, --postgres
+echo                         Build with PostgreSQL database support. Uses build-postgres by default.
+echo   -db, --db            Build with SQLite and PostgreSQL database support. Uses build-db by default.
+echo   -no-sqlite, --no-sqlite
+echo                         Build without SQLite database support.
+echo   -no-postgres, --no-postgres
+echo                         Build without PostgreSQL database support.
 echo   -debug, --debug      Build Debug. This is the default.
 echo   -release, --release  Build Release.
 echo   -b, --build-dir DIR  Use a custom build directory.

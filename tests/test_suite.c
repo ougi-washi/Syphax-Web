@@ -1,5 +1,6 @@
 #include "sw_html.h"
 #include "sw_js.h"
+#include "sw_db.h"
 #include "sw_server.h"
 #include "sw_translator.h"
 #include "sw_utility.h"
@@ -2878,6 +2879,162 @@ static void test_server_loop_shards(void) {
     sw_server_destroy(server);
 }
 
+static void test_database_helpers(void) {
+#if !defined(SYPHAX_WEB_HAS_SQLITE) && !defined(SYPHAX_WEB_HAS_POSTGRES)
+    {
+        sw_db* db = sw_db_open(NULL);
+        assert(db == NULL);
+        assert(sw_db_error(NULL) != NULL);
+        assert(sw_db_error(NULL)[0] != '\0');
+    }
+#endif
+
+#if defined(SYPHAX_WEB_HAS_SQLITE)
+    {
+        const u8 payload[] = { 1, 2, 3, 0 };
+        const void* blob = NULL;
+        sw_db* db = sw_db_open(NULL);
+        sw_db_stmt* stmt;
+
+        assert(db != NULL);
+        assert(sw_db_get_driver(db) == SW_DB_DRIVER_SQLITE);
+        assert(strcmp(sw_db_driver_name(sw_db_get_driver(db)), "sqlite") == 0);
+
+        assert(sw_db_exec(db,
+            "CREATE TABLE notes ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "title TEXT NOT NULL,"
+            "hits INTEGER NOT NULL,"
+            "rating REAL NOT NULL,"
+            "payload BLOB"
+            ")") == 0);
+
+        stmt = sw_db_prepare(db, "INSERT INTO notes(title, hits, rating, payload) VALUES(?, ?, ?, ?)");
+        assert(stmt != NULL);
+        assert(sw_db_bind_text(stmt, 1, "hello") == 0);
+        assert(sw_db_bind_int(stmt, 2, 7) == 0);
+        assert(sw_db_bind_float(stmt, 3, 3.25) == 0);
+        assert(sw_db_bind_blob(stmt, 4, payload, sizeof(payload)) == 0);
+        assert(sw_db_step(stmt) == SW_DB_DONE);
+        sw_db_finalize(stmt);
+        assert(sw_db_changes(db) == 1);
+        assert(sw_db_last_insert_id(db) == 1);
+
+        stmt = sw_db_prepare(db, "SELECT '?' AS literal, id, title, hits, rating, payload FROM notes WHERE title = ?");
+        assert(stmt != NULL);
+        assert(sw_db_bind_text(stmt, 1, "hello") == 0);
+        assert(sw_db_step(stmt) == SW_DB_ROW);
+        assert(sw_db_column_count(stmt) == 6);
+        assert(strcmp(sw_db_column_name(stmt, 2), "title") == 0);
+        assert(strcmp(sw_db_column_text(stmt, 0), "?") == 0);
+        assert(sw_db_column_type(stmt, 2) == SW_DB_VALUE_TEXT);
+        assert(strcmp(sw_db_column_text(stmt, 2), "hello") == 0);
+        assert(sw_db_column_int(stmt, 3) == 7);
+        assert(sw_db_column_float(stmt, 4) > 3.2);
+        assert(sw_db_column_float(stmt, 4) < 3.3);
+        assert(sw_db_column_type(stmt, 5) == SW_DB_VALUE_BLOB);
+        assert(sw_db_column_blob(stmt, 5, &blob) == sizeof(payload));
+        assert(blob != NULL);
+        assert(memcmp(blob, payload, sizeof(payload)) == 0);
+        assert(sw_db_step(stmt) == SW_DB_DONE);
+        sw_db_finalize(stmt);
+
+        stmt = sw_db_prepare(db, "SELECT title FROM notes WHERE hits = ?");
+        assert(stmt != NULL);
+        assert(sw_db_bind_int(stmt, 1, 7) == 0);
+        assert(sw_db_step(stmt) == SW_DB_ROW);
+        assert(strcmp(sw_db_column_text(stmt, 0), "hello") == 0);
+        assert(sw_db_reset(stmt) == 0);
+        assert(sw_db_bind_int(stmt, 1, 99) == 0);
+        assert(sw_db_step(stmt) == SW_DB_DONE);
+        sw_db_finalize(stmt);
+
+        assert(sw_db_begin(db) == 0);
+        assert(sw_db_exec(db, "INSERT INTO notes(title, hits, rating, payload) VALUES('rollback', 1, 1.0, NULL)") == 0);
+        assert(sw_db_rollback(db) == 0);
+
+        stmt = sw_db_prepare(db, "SELECT COUNT(*) FROM notes");
+        assert(stmt != NULL);
+        assert(sw_db_step(stmt) == SW_DB_ROW);
+        assert(sw_db_column_int(stmt, 0) == 1);
+        sw_db_finalize(stmt);
+
+        assert(sw_db_exec(db, "SELECT * FROM missing_table") != 0);
+        assert(sw_db_error(db) != NULL);
+        assert(sw_db_error(db)[0] != '\0');
+
+        sw_db_close(db);
+    }
+#endif
+
+#if defined(SYPHAX_WEB_HAS_POSTGRES)
+    {
+        const c8* url = getenv("SYPHAX_WEB_TEST_POSTGRES_URL");
+
+        if (url != NULL && url[0] != '\0') {
+            const u8 payload[] = { 9, 8, 7, 0 };
+            const void* blob = NULL;
+            sw_db_config config = sw_db_config_default();
+            sw_db* db;
+            sw_db_stmt* stmt;
+
+            config.url = url;
+            db = sw_db_open(&config);
+            assert(db != NULL);
+            assert(sw_db_get_driver(db) == SW_DB_DRIVER_POSTGRES);
+            assert(strcmp(sw_db_driver_name(sw_db_get_driver(db)), "postgres") == 0);
+
+            assert(sw_db_exec(db, "CREATE TEMP TABLE sw_db_test (title TEXT NOT NULL, hits BIGINT NOT NULL, payload BYTEA)") == 0);
+
+            stmt = sw_db_prepare(db, "INSERT INTO sw_db_test(title, hits, payload) VALUES(?, ?, ?)");
+            assert(stmt != NULL);
+            assert(sw_db_bind_text(stmt, 1, "hello") == 0);
+            assert(sw_db_bind_int(stmt, 2, 12) == 0);
+            assert(sw_db_bind_blob(stmt, 3, payload, sizeof(payload)) == 0);
+            assert(sw_db_step(stmt) == SW_DB_DONE);
+            sw_db_finalize(stmt);
+            assert(sw_db_changes(db) == 1);
+
+            stmt = sw_db_prepare(db, "SELECT '?' AS literal, title, hits, payload FROM sw_db_test WHERE hits = ?");
+            assert(stmt != NULL);
+            assert(sw_db_bind_int(stmt, 1, 12) == 0);
+            assert(sw_db_step(stmt) == SW_DB_ROW);
+            assert(sw_db_column_count(stmt) == 4);
+            assert(strcmp(sw_db_column_text(stmt, 0), "?") == 0);
+            assert(strcmp(sw_db_column_text(stmt, 1), "hello") == 0);
+            assert(sw_db_column_int(stmt, 2) == 12);
+            assert(sw_db_column_type(stmt, 3) == SW_DB_VALUE_BLOB);
+            assert(sw_db_column_blob(stmt, 3, &blob) == sizeof(payload));
+            assert(blob != NULL);
+            assert(memcmp(blob, payload, sizeof(payload)) == 0);
+            assert(sw_db_step(stmt) == SW_DB_DONE);
+            sw_db_finalize(stmt);
+
+            stmt = sw_db_prepare(db, "SELECT E'quote\\'?literal' AS literal, ?::BIGINT");
+            assert(stmt != NULL);
+            assert(sw_db_bind_int(stmt, 1, 33) == 0);
+            assert(sw_db_step(stmt) == SW_DB_ROW);
+            assert(strcmp(sw_db_column_text(stmt, 0), "quote'?literal") == 0);
+            assert(sw_db_column_int(stmt, 1) == 33);
+            assert(sw_db_step(stmt) == SW_DB_DONE);
+            sw_db_finalize(stmt);
+
+            assert(sw_db_begin(db) == 0);
+            assert(sw_db_exec(db, "INSERT INTO sw_db_test(title, hits, payload) VALUES('rollback', 1, NULL)") == 0);
+            assert(sw_db_rollback(db) == 0);
+
+            stmt = sw_db_prepare(db, "SELECT COUNT(*) FROM sw_db_test");
+            assert(stmt != NULL);
+            assert(sw_db_step(stmt) == SW_DB_ROW);
+            assert(sw_db_column_int(stmt, 0) == 1);
+            sw_db_finalize(stmt);
+
+            sw_db_close(db);
+        }
+    }
+#endif
+}
+
 static void test_tls_support(void) {
     sw_tls_config tls = sw_tls_config_default();
     sw_mgr* mgr = sw_mgr_create(NULL);
@@ -2979,6 +3136,7 @@ static const sw_named_test sw_named_tests[] = {
     { "server_config", test_server_config },
     { "server_keep_alive_and_limits", test_server_keep_alive_and_limits },
     { "server_loop_shards", test_server_loop_shards },
+    { "database_helpers", test_database_helpers },
     { "tls_support", test_tls_support }
 };
 
