@@ -167,8 +167,8 @@ static inline void render_head(sw_buffer* h, const c8* title) {
     ));
 }
 
-static inline sw_http_config http_config(void) {
-    sw_http_config config = sw_http_config_default();
+static inline sw_server_config server_config(void) {
+    sw_server_config config = sw_server_config_default();
 
     config.max_body_bytes = 256 * 1024;
     config.idle_timeout_ms = 20000;
@@ -247,7 +247,7 @@ static inline void copy_text(c8* out, sz out_len, const c8* text) {
 
 static inline i32 listen_https(
     const c8* url,
-    const sw_http_config* http,
+    const sw_server_config* http,
     sw_http_handler handler,
     void* user_data,
     const c8* label

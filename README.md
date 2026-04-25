@@ -33,6 +33,12 @@ Install:
 cmake --install build --prefix /your/prefix
 ```
 
+Stress tool:
+
+```bash
+bin/server_stress --mode mixed --workers 4 --connections 1000 --requests 10000
+```
+
 ## Link
 
 ```cmake
@@ -75,7 +81,19 @@ int main(void) {
 
 Open `http://127.0.0.1:8000`.
 
-Pass `NULL` for default request limits and timeouts. Use `sw_http_config_default()` when you want to override them.
+Pass `NULL` for defaults. Use `sw_server_config_default()` to override backlog, worker count, connection limits, buffer caps, keep-alive limits, and timeouts.
+
+Long-running servers can be managed explicitly:
+
+```c
+sw_server_config config = sw_server_config_default();
+config.worker_count = 4;
+
+sw_server* server = sw_server_create(&config);
+sw_server_add_http(server, "http://0.0.0.0:8000", handler, NULL);
+sw_server_run(server);
+sw_server_destroy(server);
+```
 
 ## Cookies And Sessions
 

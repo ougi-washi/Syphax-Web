@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef struct sw_mgr sw_mgr;
+typedef struct sw_mgr sw_server;
 typedef struct sw_connection sw_connection;
 typedef struct sw_sessions sw_sessions;
 typedef struct sw_session sw_session;
@@ -77,14 +78,26 @@ typedef struct {
     c8* content_type;
 } sw_http_multipart;
 
-typedef struct {
+typedef struct sw_server_config {
+    i32 listen_backlog;
+    sz event_batch_size;
+    sz worker_count;
+    sz max_connections;
     sz max_header_bytes;
     sz max_body_bytes;
     sz max_header_count;
+    sz max_read_buffer_bytes;
+    sz max_write_buffer_bytes;
+    sz initial_read_buffer_bytes;
+    sz initial_write_buffer_bytes;
+    sz keep_alive_max_requests;
     i32 idle_timeout_ms;
     i32 header_timeout_ms;
     i32 body_timeout_ms;
-} sw_http_config;
+    i32 write_timeout_ms;
+} sw_server_config;
+
+typedef sw_server_config sw_http_config;
 
 typedef struct {
     const c8* certificate_file;
@@ -100,8 +113,24 @@ typedef struct {
 
 typedef void (*sw_http_handler)(sw_connection* connection, const sw_http_message* request, void* user_data);
 
+SW_API sw_server_config sw_server_config_default(void);
 SW_API sw_http_config sw_http_config_default(void);
 SW_API sw_tls_config sw_tls_config_default(void);
+SW_API sw_server* sw_server_create(const sw_server_config* config);
+SW_API void sw_server_destroy(sw_server* server);
+SW_API i32 sw_server_add_http(sw_server* server, const c8* url, sw_http_handler handler, void* user_data);
+SW_API i32 sw_server_add_https(sw_server* server, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data);
+SW_API i32 sw_server_poll(sw_server* server, i32 timeout_ms);
+SW_API i32 sw_server_run(sw_server* server);
+SW_API i32 sw_server_start(sw_server* server);
+SW_API i32 sw_server_wait(sw_server* server);
+SW_API void sw_server_stop(sw_server* server);
+SW_API b8 sw_server_is_running(const sw_server* server);
+SW_API u16 sw_server_get_listener_port(const sw_server* server, sz listener_index);
+SW_API sz sw_server_open_connections(const sw_server* server);
+SW_API sz sw_server_worker_count(const sw_server* server);
+SW_API sz sw_server_worker_open_connections(const sw_server* server, sz worker_index);
+SW_API sz sw_server_worker_accepted_connections(const sw_server* server, sz worker_index);
 SW_API sw_mgr* sw_mgr_create(const sw_http_config* config);
 SW_API void sw_mgr_destroy(sw_mgr* mgr);
 SW_API i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* user_data);

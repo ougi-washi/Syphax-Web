@@ -99,7 +99,7 @@ struct sw_tokens {
 static sz sw_socket_runtime_users = 0;
 static sw_mgr* sw_signal_mgr = NULL;
 
-static sz sw_http_config_max_request_bytes(const sw_http_config* config);
+static sz sw_server_config_max_request_bytes(const sw_server_config* config);
 static void sw_http_header_array_free_owned(sw_http_header_array* headers);
 static b8 sw_parse_content_length_value(const c8* value, sz value_len, sz* out_length);
 static b8 sw_ascii_case_equal_range(const c8* lhs, const c8* rhs, sz len);
@@ -118,10 +118,10 @@ static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset);
 static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms);
 static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection);
 static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connection* connection);
-static void sw_mgr_flush_pending_output(sw_mgr* mgr);
-static i32 sw_server_run(sw_mgr* mgr);
-static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
-static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
+static i32 sw_server_run_loop(sw_mgr* mgr);
+static i32 sw_mgr_effective_poll_timeout(sw_mgr* mgr, i32 timeout_ms);
+static void sw_mgr_expire_timeouts(sw_mgr* mgr);
+static void sw_mgr_schedule_connection_timeout(sw_mgr* mgr, sw_connection* connection, f64 now_ms);
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
 static i32 sw_http_send_file(sw_connection* connection, const c8* path);
 static void sw_connection_clear_response_headers(sw_connection* connection);
@@ -150,6 +150,30 @@ static void sw_token_free(sw_token* token);
 #if defined(SYPHAX_WEB_HAS_CRYPTO)
 static void sw_tokens_remove_at(sw_tokens* tokens, sz index);
 #endif
+static sw_mgr* sw_mgr_create_internal(const sw_server_config* config, b8 server_owner, sw_mgr* root, sw_worker* worker_owner);
+static void sw_mgr_destroy_internal(sw_mgr* mgr);
+static b8 sw_mgr_try_reserve_connection(sw_mgr* mgr);
+static void sw_mgr_release_connection(sw_mgr* mgr);
+static sz sw_mgr_active_connections(const sw_mgr* mgr);
+static int sw_mgr_dispatch_connection(
+    sw_mgr* mgr,
+    sw_listener* listener,
+    sw_socket fd,
+    const c8* remote_ip,
+    u16 remote_port,
+    b8 counted
+);
+static int sw_mgr_drain_pending_connections(sw_mgr* mgr);
+static void* sw_worker_thread_main(void* arg);
+static void* sw_accept_thread_main(void* arg);
+static i32 sw_server_start_workers(sw_mgr* server);
+static void sw_server_join_workers(sw_mgr* server);
+static void sw_mgr_close_all_connections(sw_mgr* mgr);
+static b8 sw_request_allows_keep_alive(const sw_connection* connection);
+static void sw_connection_prepare_response(sw_connection* connection);
+static b8 sw_connection_append_output(sw_connection* connection, const void* data, sz data_len);
+static int sw_connection_finish_response(sw_mgr* mgr, sw_connection* connection);
+static int sw_connection_process_input(sw_mgr* mgr, sw_connection* connection);
 
 #if defined(SYPHAX_WEB_HAS_TLS)
 static SSL_CTX* sw_tls_context_create(const sw_tls_config* config);
@@ -575,7 +599,7 @@ static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset) {
     return sw_find_bytes_from(data, data_len, offset, "\r\n", 2);
 }
 
-static sz sw_http_config_max_request_bytes(const sw_http_config* config) {
+static sz sw_server_config_max_request_bytes(const sw_server_config* config) {
     sz total = 4;
 
     if (config == NULL) {
@@ -758,7 +782,7 @@ static b8 sw_parse_listen_url(const c8* url, c8* host, sz host_cap, c8* port, sz
     return sw_parse_listen_url_scheme(url, "http", 0, "80", host, host_cap, port, port_cap);
 }
 
-static sw_socket sw_create_listener_socket(const c8* host, const c8* port, u16* out_bound_port) {
+static sw_socket sw_create_listener_socket(const c8* host, const c8* port, i32 listen_backlog, u16* out_bound_port) {
     struct addrinfo hints;
     struct addrinfo* results = NULL;
     struct addrinfo* current;
@@ -785,7 +809,7 @@ static sw_socket sw_create_listener_socket(const c8* host, const c8* port, u16* 
         setsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
 
         if (bind(listener_fd, current->ai_addr, (socklen_t)current->ai_addrlen) == 0
-            && listen(listener_fd, 128) == 0
+            && listen(listener_fd, listen_backlog > 0 ? listen_backlog : 128) == 0
             && sw_socket_set_nonblocking(listener_fd) == 0) {
             if (out_bound_port != NULL) {
                 struct sockaddr_storage bound_addr;
@@ -810,7 +834,74 @@ static sw_socket sw_create_listener_socket(const c8* host, const c8* port, u16* 
     return SW_INVALID_SOCKET;
 }
 
-static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, sw_socket fd, const c8* remote_ip, u16 remote_port) {
+static sz sw_atomic_load_size(const sz* value) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_load_n(value, __ATOMIC_RELAXED);
+#else
+    return *value;
+#endif
+}
+
+static b8 sw_atomic_try_increment_size(sz* value, sz max_value) {
+#if defined(__GNUC__) || defined(__clang__)
+    sz current = __atomic_load_n(value, __ATOMIC_RELAXED);
+    for (;;) {
+        if (max_value > 0 && current >= max_value) {
+            return 0;
+        }
+        if (__atomic_compare_exchange_n(value, &current, current + 1, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            return 1;
+        }
+    }
+#else
+    if (max_value > 0 && *value >= max_value) {
+        return 0;
+    }
+    *value += 1;
+    return 1;
+#endif
+}
+
+static void sw_atomic_decrement_size(sz* value) {
+#if defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_sub(value, 1, __ATOMIC_RELAXED);
+#else
+    if (*value > 0) {
+        *value -= 1;
+    }
+#endif
+}
+
+static sz sw_mgr_active_connections(const sw_mgr* mgr) {
+    const sw_mgr* root = (mgr != NULL && mgr->root != NULL) ? mgr->root : mgr;
+    return root != NULL ? sw_atomic_load_size(&root->active_connection_count) : 0;
+}
+
+static b8 sw_mgr_try_reserve_connection(sw_mgr* mgr) {
+    sw_mgr* root = (mgr != NULL && mgr->root != NULL) ? mgr->root : mgr;
+
+    if (root == NULL) {
+        return 0;
+    }
+    return sw_atomic_try_increment_size(&root->active_connection_count, root->config.max_connections);
+}
+
+static void sw_mgr_release_connection(sw_mgr* mgr) {
+    sw_mgr* root = (mgr != NULL && mgr->root != NULL) ? mgr->root : mgr;
+
+    if (root != NULL && sw_atomic_load_size(&root->active_connection_count) > 0) {
+        sw_atomic_decrement_size(&root->active_connection_count);
+    }
+}
+
+static sw_connection* sw_connection_create(
+    sw_mgr* mgr,
+    sw_listener* listener,
+    sw_socket fd,
+    const c8* remote_ip,
+    u16 remote_port,
+    b8 counted
+) {
     sw_connection* connection = (sw_connection*)calloc(1, sizeof(*connection));
     s_handle handle;
     const f64 now_ms = sw_now_ms();
@@ -826,6 +917,7 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
     connection->handler = listener->handler;
     connection->handler_user_data = listener->handler_user_data;
     connection->remote_port = remote_port;
+    connection->counted = counted;
     connection->opened_at_ms = now_ms;
     connection->phase_started_at_ms = now_ms;
     connection->last_activity_at_ms = now_ms;
@@ -854,6 +946,12 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
 
     sw_char_array_init(&connection->read_buffer);
     sw_char_array_init(&connection->write_buffer);
+    if (mgr->config.initial_read_buffer_bytes > 0) {
+        s_array_reserve(&connection->read_buffer, mgr->config.initial_read_buffer_bytes);
+    }
+    if (mgr->config.initial_write_buffer_bytes > 0) {
+        s_array_reserve(&connection->write_buffer, mgr->config.initial_write_buffer_bytes);
+    }
     s_array_init(&connection->header_storage);
     s_array_init(&connection->response_headers);
 
@@ -861,7 +959,7 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
     connection->array_handle = handle;
 
     if (sw_backend_register_connection(mgr, connection) != 0) {
-        s_array_remove_ordered(&mgr->connections, handle);
+        s_array_remove(&mgr->connections, handle);
 #if defined(SYPHAX_WEB_HAS_TLS)
         if (connection->tls != NULL) {
             SSL_free(connection->tls);
@@ -875,6 +973,7 @@ static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, s
         return NULL;
     }
 
+    sw_mgr_schedule_connection_timeout(mgr, connection, now_ms);
     return connection;
 }
 
@@ -899,14 +998,192 @@ void sw_connection_reset_request(sw_connection* connection) {
     s_array_clear(&connection->header_storage);
     memset(&connection->request, 0, sizeof(connection->request));
     connection->request_ready = 0;
+    connection->request_started = 0;
     connection->headers_complete = 0;
+    connection->response_started = 0;
+    connection->must_close = 0;
+    connection->parsed_request_bytes = 0;
     connection->phase_started_at_ms = sw_now_ms();
+    if (connection->mgr != NULL) {
+        sw_mgr_schedule_connection_timeout(connection->mgr, connection, connection->phase_started_at_ms);
+    }
 }
 
 static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms) {
     if (connection != NULL) {
         connection->last_activity_at_ms = now_ms;
+        if (connection->mgr != NULL) {
+            sw_mgr_schedule_connection_timeout(connection->mgr, connection, now_ms);
+        }
     }
+}
+
+static b8 sw_connection_timeout_due_ms(const sw_mgr* mgr, const sw_connection* connection, f64 now_ms, f64* out_due_ms) {
+    f64 due_ms = 0.0;
+    b8 has_timeout = 0;
+
+    if (mgr == NULL || connection == NULL || out_due_ms == NULL) {
+        return 0;
+    }
+
+    if (connection->write_shutdown) {
+        if (mgr->config.idle_timeout_ms > 0) {
+            *out_due_ms = connection->last_activity_at_ms + (f64)mgr->config.idle_timeout_ms;
+            return 1;
+        }
+        return 0;
+    }
+
+#if defined(SYPHAX_WEB_HAS_TLS)
+    if (sw_connection_tls_handshake_pending(connection) && connection->tls_handshake_timeout_ms > 0) {
+        due_ms = connection->tls_handshake_started_at_ms + (f64)connection->tls_handshake_timeout_ms;
+        has_timeout = 1;
+    }
+#endif
+
+    if (sw_connection_has_pending_output(connection) && mgr->config.write_timeout_ms > 0) {
+        const f64 write_due_ms = connection->last_activity_at_ms + (f64)mgr->config.write_timeout_ms;
+        if (!has_timeout || write_due_ms < due_ms) {
+            due_ms = write_due_ms;
+        }
+        has_timeout = 1;
+    }
+
+    if (connection->request_started && !connection->request_ready
+#if defined(SYPHAX_WEB_HAS_TLS)
+        && !sw_connection_tls_handshake_pending(connection)
+#endif
+    ) {
+        const i32 phase_timeout_ms = connection->headers_complete ? mgr->config.body_timeout_ms : mgr->config.header_timeout_ms;
+        if (phase_timeout_ms > 0) {
+            const f64 phase_due_ms = connection->phase_started_at_ms + (f64)phase_timeout_ms;
+            if (!has_timeout || phase_due_ms < due_ms) {
+                due_ms = phase_due_ms;
+            }
+            has_timeout = 1;
+        }
+    }
+
+    if (mgr->config.idle_timeout_ms > 0) {
+        const f64 idle_due_ms = connection->last_activity_at_ms + (f64)mgr->config.idle_timeout_ms;
+        if (!has_timeout || idle_due_ms < due_ms) {
+            due_ms = idle_due_ms;
+        }
+        has_timeout = 1;
+    }
+
+    if (!has_timeout) {
+        return 0;
+    }
+    (void)now_ms;
+    *out_due_ms = due_ms;
+    return 1;
+}
+
+static void sw_timer_heap_swap(sw_timer_entry* entries, sz lhs, sz rhs) {
+    const sw_timer_entry tmp = entries[lhs];
+    entries[lhs] = entries[rhs];
+    entries[rhs] = tmp;
+}
+
+static void sw_timer_heap_push(sw_timer_array* timers, sw_timer_entry entry) {
+    sz index;
+    sw_timer_entry* entries;
+
+    s_array_add(timers, entry);
+    index = s_array_get_size(timers) - 1;
+    entries = s_array_get_data(timers);
+    while (index > 0) {
+        const sz parent = (index - 1) / 2;
+        if (entries[parent].due_ms <= entries[index].due_ms) {
+            break;
+        }
+        sw_timer_heap_swap(entries, parent, index);
+        index = parent;
+    }
+}
+
+static b8 sw_timer_heap_pop(sw_timer_array* timers, sw_timer_entry* out_entry) {
+    const sz size = s_array_get_size(timers);
+    sw_timer_entry* entries;
+    sz index = 0;
+
+    if (size == 0) {
+        return 0;
+    }
+
+    entries = s_array_get_data(timers);
+    if (out_entry != NULL) {
+        *out_entry = entries[0];
+    }
+    if (size == 1) {
+        s_array_remove(timers, s_array_handle(timers, 0));
+        return 1;
+    }
+
+    entries[0] = entries[size - 1];
+    s_array_remove(timers, s_array_handle(timers, (u32)(size - 1)));
+    entries = s_array_get_data(timers);
+
+    for (;;) {
+        const sz left = (index * 2) + 1;
+        const sz right = left + 1;
+        sz smallest = index;
+
+        if (left < s_array_get_size(timers) && entries[left].due_ms < entries[smallest].due_ms) {
+            smallest = left;
+        }
+        if (right < s_array_get_size(timers) && entries[right].due_ms < entries[smallest].due_ms) {
+            smallest = right;
+        }
+        if (smallest == index) {
+            break;
+        }
+        sw_timer_heap_swap(entries, index, smallest);
+        index = smallest;
+    }
+
+    return 1;
+}
+
+static b8 sw_mgr_peek_timer(sw_mgr* mgr, f64 now_ms, sw_timer_entry* out_entry) {
+    while (mgr != NULL && s_array_get_size(&mgr->timers) > 0) {
+        sw_timer_entry entry = s_array_get_data(&mgr->timers)[0];
+        sw_connection** connection_slot = s_array_get(&mgr->connections, entry.connection_handle);
+        sw_connection* connection = connection_slot != NULL ? *connection_slot : NULL;
+        f64 due_ms = 0.0;
+
+        if (connection == NULL
+            || connection->timer_generation != entry.generation
+            || !sw_connection_timeout_due_ms(mgr, connection, now_ms, &due_ms)
+            || due_ms != entry.due_ms) {
+            sw_timer_heap_pop(&mgr->timers, NULL);
+            continue;
+        }
+        if (out_entry != NULL) {
+            *out_entry = entry;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static void sw_mgr_schedule_connection_timeout(sw_mgr* mgr, sw_connection* connection, f64 now_ms) {
+    f64 due_ms;
+    sw_timer_entry entry;
+
+    if (mgr == NULL || connection == NULL) {
+        return;
+    }
+    if (!sw_connection_timeout_due_ms(mgr, connection, now_ms, &due_ms)) {
+        return;
+    }
+
+    connection->timer_generation += 1;
+    entry.due_ms = due_ms;
+    entry.connection_handle = connection->array_handle;
+    entry.generation = connection->timer_generation;
+    sw_timer_heap_push(&mgr->timers, entry);
 }
 
 void sw_mgr_close_connection(sw_mgr* mgr, sw_connection* connection) {
@@ -940,7 +1217,12 @@ void sw_mgr_close_connection(sw_mgr* mgr, sw_connection* connection) {
     sw_char_array_free(&connection->write_buffer);
 
     if (connection->array_handle != S_HANDLE_NULL) {
-        s_array_remove_ordered(&mgr->connections, connection->array_handle);
+        s_array_remove(&mgr->connections, connection->array_handle);
+    }
+
+    if (connection->counted) {
+        sw_mgr_release_connection(mgr);
+        connection->counted = 0;
     }
 
     free(connection);
@@ -950,6 +1232,7 @@ int sw_mgr_sync_connection(sw_mgr* mgr, sw_connection* connection) {
     if (mgr == NULL || connection == NULL) {
         return -1;
     }
+    sw_mgr_schedule_connection_timeout(mgr, connection, sw_now_ms());
     return sw_backend_update_connection(mgr, connection);
 }
 
@@ -1015,26 +1298,6 @@ static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connectio
     }
 }
 
-static void sw_mgr_flush_pending_output(sw_mgr* mgr) {
-    sz i = 0;
-
-    if (mgr == NULL) {
-        return;
-    }
-
-    while (i < s_array_get_size(&mgr->connections)) {
-        sw_connection* connection = s_array_get_data(&mgr->connections)[i];
-
-        if (sw_connection_has_pending_output(connection)) {
-            if (sw_mgr_connection_writable(mgr, connection) < 0) {
-                continue;
-            }
-        }
-
-        ++i;
-    }
-}
-
 b8 sw_connection_wants_read(const sw_connection* connection) {
     if (connection == NULL) {
         return 0;
@@ -1072,7 +1335,7 @@ b8 sw_connection_wants_write(const sw_connection* connection) {
 }
 
 static sw_parse_result sw_connection_try_parse_request(sw_connection* connection) {
-    const sw_http_config* config;
+    const sw_server_config* config;
     const c8* data;
     const sz data_len = sw_char_array_size(&connection->read_buffer);
     const sz header_end = sw_find_bytes(sw_char_array_data(&connection->read_buffer), data_len, "\r\n\r\n", 4);
@@ -1102,8 +1365,10 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
         return SW_PARSE_HEADERS_TOO_LARGE;
     }
     if (!connection->headers_complete) {
+        const f64 now_ms = sw_now_ms();
         connection->headers_complete = 1;
-        connection->phase_started_at_ms = sw_now_ms();
+        connection->phase_started_at_ms = now_ms;
+        sw_mgr_schedule_connection_timeout(connection->mgr, connection, now_ms);
     }
 
     first_line_end = sw_find_crlf_from(data, header_end, 0);
@@ -1235,6 +1500,7 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
     connection->header_storage = parsed_headers;
     connection->request = parsed_request;
     connection->request_ready = 1;
+    connection->parsed_request_bytes = header_end + 4 + parsed_request.content_length;
     return SW_PARSE_READY;
 
 pending:
@@ -1289,7 +1555,7 @@ static int sw_connection_fill_file_buffer(sw_connection* connection) {
             return 0;
         }
         connection->file_remaining -= read_bytes;
-        if (!sw_char_array_append_bytes(&connection->write_buffer, chunk, read_bytes)) {
+        if (!sw_connection_append_output(connection, chunk, read_bytes)) {
             fclose(connection->file_stream);
             connection->file_stream = NULL;
             connection->file_remaining = 0;
@@ -1332,7 +1598,13 @@ int sw_mgr_accept_ready(sw_mgr* mgr, sw_listener* listener) {
                 snprintf(service, sizeof(service), "0");
             }
 
-            if (sw_connection_create(mgr, listener, client_fd, host, (u16)atoi(service)) == NULL) {
+            if (!sw_mgr_try_reserve_connection(mgr)) {
+                sw_socket_close(client_fd);
+                continue;
+            }
+
+            if (sw_mgr_dispatch_connection(mgr, listener, client_fd, host, (u16)atoi(service), 1) != 0) {
+                sw_mgr_release_connection(mgr);
                 sw_socket_close(client_fd);
                 return -1;
             }
@@ -1340,10 +1612,77 @@ int sw_mgr_accept_ready(sw_mgr* mgr, sw_listener* listener) {
     }
 }
 
+static int sw_mgr_dispatch_connection(
+    sw_mgr* mgr,
+    sw_listener* listener,
+    sw_socket fd,
+    const c8* remote_ip,
+    u16 remote_port,
+    b8 counted
+) {
+    if (mgr == NULL || listener == NULL || fd == SW_INVALID_SOCKET) {
+        return -1;
+    }
+
+    if (mgr->worker_count > 0 && mgr->workers != NULL) {
+        sw_worker* worker = &mgr->workers[mgr->next_worker % mgr->worker_count];
+        sw_pending_connection pending;
+
+        memset(&pending, 0, sizeof(pending));
+        pending.fd = fd;
+        pending.listener = listener;
+        pending.remote_port = remote_port;
+        pending.counted = counted;
+        if (remote_ip != NULL) {
+            snprintf(pending.remote_ip, sizeof(pending.remote_ip), "%s", remote_ip);
+        }
+
+        mgr->next_worker = (mgr->next_worker + 1) % mgr->worker_count;
+        s_mutex_lock(&worker->pending_lock);
+        s_array_add(&worker->pending, pending);
+        worker->accepted_count += 1;
+        s_mutex_unlock(&worker->pending_lock);
+        return 0;
+    }
+
+    if (sw_connection_create(mgr, listener, fd, remote_ip, remote_port, counted) == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+static int sw_mgr_drain_pending_connections(sw_mgr* mgr) {
+    sw_pending_connection_array pending;
+    sz i;
+
+    if (mgr == NULL || mgr->worker_owner == NULL) {
+        return 0;
+    }
+
+    s_array_init(&pending);
+    s_mutex_lock(&mgr->worker_owner->pending_lock);
+    s_array_copy(&pending, &mgr->worker_owner->pending);
+    s_array_clear(&mgr->worker_owner->pending);
+    s_mutex_unlock(&mgr->worker_owner->pending_lock);
+
+    for (i = 0; i < s_array_get_size(&pending); ++i) {
+        sw_pending_connection* item = &s_array_get_data(&pending)[i];
+        if (sw_connection_create(mgr, item->listener, item->fd, item->remote_ip, item->remote_port, item->counted) == NULL) {
+            if (item->counted) {
+                sw_mgr_release_connection(mgr);
+            }
+            sw_socket_close(item->fd);
+        }
+    }
+
+    s_array_clear(&pending);
+    return 0;
+}
+
 int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
     c8 chunk[4096];
     b8 read_any = 0;
-    const sz max_request_bytes = sw_http_config_max_request_bytes(&mgr->config);
+    const sz max_request_bytes = sw_server_config_max_request_bytes(&mgr->config);
 
     if (connection->write_shutdown) {
         return sw_connection_discard_available_plain_input(mgr, connection);
@@ -1375,9 +1714,24 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
         if (read_bytes > 0) {
 #endif
             read_any = 1;
-            sw_char_array_append_bytes(&connection->read_buffer, chunk, (sz)read_bytes);
+            if (!connection->request_started) {
+                connection->request_started = 1;
+                connection->phase_started_at_ms = sw_now_ms();
+            }
+            if (mgr->config.max_read_buffer_bytes > 0
+                && ((sz)read_bytes > SIZE_MAX - sw_char_array_size(&connection->read_buffer)
+                    || sw_char_array_size(&connection->read_buffer) + (sz)read_bytes > mgr->config.max_read_buffer_bytes)) {
+                connection->must_close = 1;
+                sw_http_reply_status_text(connection, 413, "Payload Too Large");
+                return 0;
+            }
+            if (!sw_char_array_append_bytes(&connection->read_buffer, chunk, (sz)read_bytes)) {
+                sw_mgr_close_connection(mgr, connection);
+                return -1;
+            }
             sw_connection_mark_activity(connection, sw_now_ms());
             if (sw_char_array_size(&connection->read_buffer) > max_request_bytes) {
+                connection->must_close = 1;
                 sw_http_reply_status_text(connection, 413, "Payload Too Large");
                 return 0;
             }
@@ -1414,6 +1768,17 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
         return 0;
     }
 
+    return sw_connection_process_input(mgr, connection);
+}
+
+static int sw_connection_process_input(sw_mgr* mgr, sw_connection* connection) {
+    if (mgr == NULL || connection == NULL || sw_connection_has_pending_output(connection)) {
+        return 0;
+    }
+    if (connection->request_ready) {
+        return 0;
+    }
+
     switch (sw_connection_try_parse_request(connection)) {
         case SW_PARSE_READY:
             if (connection->handler != NULL) {
@@ -1424,22 +1789,56 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
         case SW_PARSE_PENDING:
             return 0;
         case SW_PARSE_UNSUPPORTED_CHUNKED:
+            connection->must_close = 1;
             sw_http_replyf(connection, 501, "text/plain; charset=utf-8", "Chunked requests are not supported");
             sw_mgr_sync_connection(mgr, connection);
             return 0;
         case SW_PARSE_HEADERS_TOO_LARGE:
         case SW_PARSE_TOO_MANY_HEADERS:
+            connection->must_close = 1;
             sw_http_reply_status_text(connection, 431, "Request Header Fields Too Large");
             return 0;
         case SW_PARSE_PAYLOAD_TOO_LARGE:
+            connection->must_close = 1;
             sw_http_reply_status_text(connection, 413, "Payload Too Large");
             return 0;
         case SW_PARSE_BAD_REQUEST:
         default:
+            connection->must_close = 1;
             sw_http_replyf(connection, 400, "text/plain; charset=utf-8", "Bad Request");
             sw_mgr_sync_connection(mgr, connection);
             return 0;
     }
+}
+
+static int sw_connection_finish_response(sw_mgr* mgr, sw_connection* connection) {
+    if (mgr == NULL || connection == NULL || sw_connection_has_pending_output(connection)) {
+        return 0;
+    }
+
+    if (!connection->response_started) {
+        if (connection->close_after_write) {
+            return sw_connection_shutdown_send(mgr, connection);
+        }
+        return sw_mgr_sync_connection(mgr, connection);
+    }
+
+    connection->handled_requests += 1;
+    if (connection->close_after_write) {
+        return sw_connection_shutdown_send(mgr, connection);
+    }
+
+    if (connection->parsed_request_bytes > 0) {
+        sw_char_array_consume_prefix(&connection->read_buffer, connection->parsed_request_bytes);
+    }
+    sw_connection_reset_request(connection);
+
+    if (sw_char_array_size(&connection->read_buffer) > 0) {
+        connection->request_started = 1;
+        connection->phase_started_at_ms = sw_now_ms();
+        return sw_connection_process_input(mgr, connection);
+    }
+    return sw_mgr_sync_connection(mgr, connection);
 }
 
 int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
@@ -1472,7 +1871,7 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
         const int send_rc = sw_connection_transport_send(connection, data, data_len, &sent_bytes);
         if (send_rc > 0) {
 #else
-        sent_bytes = (int)send(connection->fd, data, (int)data_len, 0);
+        sent_bytes = (int)send(connection->fd, data, (int)(data_len > (sz)INT_MAX ? (sz)INT_MAX : data_len), 0);
         if (sent_bytes > 0) {
 #endif
             sw_connection_mark_activity(connection, sw_now_ms());
@@ -1510,24 +1909,38 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
         }
     }
 
-    if (sw_char_array_size(&connection->write_buffer) == 0 && connection->file_stream == NULL && connection->close_after_write) {
-        return sw_connection_shutdown_send(mgr, connection);
+    if (sw_char_array_size(&connection->write_buffer) == 0 && connection->file_stream == NULL) {
+        return sw_connection_finish_response(mgr, connection);
     }
 
     sw_mgr_sync_connection(mgr, connection);
     return 0;
 }
 
-sw_http_config sw_http_config_default(void) {
-    const sw_http_config config = {
+sw_server_config sw_server_config_default(void) {
+    const sw_server_config config = {
+        .listen_backlog = 1024,
+        .event_batch_size = 256,
+        .worker_count = 1,
+        .max_connections = 16384,
         .max_header_bytes = 16 * 1024,
         .max_body_bytes = 1024 * 1024,
         .max_header_count = 64,
+        .max_read_buffer_bytes = 2 * 1024 * 1024,
+        .max_write_buffer_bytes = 2 * 1024 * 1024,
+        .initial_read_buffer_bytes = 4096,
+        .initial_write_buffer_bytes = 4096,
+        .keep_alive_max_requests = 1000,
         .idle_timeout_ms = 15 * 1000,
         .header_timeout_ms = 5 * 1000,
-        .body_timeout_ms = 15 * 1000
+        .body_timeout_ms = 15 * 1000,
+        .write_timeout_ms = 30 * 1000
     };
     return config;
+}
+
+sw_http_config sw_http_config_default(void) {
+    return sw_server_config_default();
 }
 
 sw_tls_config sw_tls_config_default(void) {
@@ -1546,8 +1959,16 @@ sw_tls_config sw_tls_config_default(void) {
 }
 
 sw_mgr* sw_mgr_create(const sw_http_config* config) {
+    return sw_mgr_create_internal(config, 0, NULL, NULL);
+}
+
+sw_server* sw_server_create(const sw_server_config* config) {
+    return sw_mgr_create_internal(config, 1, NULL, NULL);
+}
+
+static sw_mgr* sw_mgr_create_internal(const sw_server_config* config, b8 server_owner, sw_mgr* root, sw_worker* worker_owner) {
     sw_mgr* mgr;
-    const sw_http_config defaults = sw_http_config_default();
+    const sw_server_config defaults = sw_server_config_default();
 
     if (sw_socket_runtime_acquire() != 0) {
         return NULL;
@@ -1561,8 +1982,24 @@ sw_mgr* sw_mgr_create(const sw_http_config* config) {
 
     s_array_init(&mgr->listeners);
     s_array_init(&mgr->connections);
+    s_array_init(&mgr->timers);
     mgr->config = defaults;
+    mgr->root = root != NULL ? root : mgr;
+    mgr->worker_owner = worker_owner;
+    mgr->is_server_owner = server_owner;
     if (config != NULL) {
+        if (config->listen_backlog > 0) {
+            mgr->config.listen_backlog = config->listen_backlog;
+        }
+        if (config->event_batch_size > 0) {
+            mgr->config.event_batch_size = config->event_batch_size;
+        }
+        if (config->worker_count > 0) {
+            mgr->config.worker_count = config->worker_count;
+        }
+        if (config->max_connections > 0) {
+            mgr->config.max_connections = config->max_connections;
+        }
         if (config->max_header_bytes > 0) {
             mgr->config.max_header_bytes = config->max_header_bytes;
         }
@@ -1571,6 +2008,21 @@ sw_mgr* sw_mgr_create(const sw_http_config* config) {
         }
         if (config->max_header_count > 0) {
             mgr->config.max_header_count = config->max_header_count;
+        }
+        if (config->max_read_buffer_bytes > 0) {
+            mgr->config.max_read_buffer_bytes = config->max_read_buffer_bytes;
+        }
+        if (config->max_write_buffer_bytes > 0) {
+            mgr->config.max_write_buffer_bytes = config->max_write_buffer_bytes;
+        }
+        if (config->initial_read_buffer_bytes > 0) {
+            mgr->config.initial_read_buffer_bytes = config->initial_read_buffer_bytes;
+        }
+        if (config->initial_write_buffer_bytes > 0) {
+            mgr->config.initial_write_buffer_bytes = config->initial_write_buffer_bytes;
+        }
+        if (config->keep_alive_max_requests > 0) {
+            mgr->config.keep_alive_max_requests = config->keep_alive_max_requests;
         }
         if (config->idle_timeout_ms > 0) {
             mgr->config.idle_timeout_ms = config->idle_timeout_ms;
@@ -1581,11 +2033,15 @@ sw_mgr* sw_mgr_create(const sw_http_config* config) {
         if (config->body_timeout_ms > 0) {
             mgr->config.body_timeout_ms = config->body_timeout_ms;
         }
+        if (config->write_timeout_ms > 0) {
+            mgr->config.write_timeout_ms = config->write_timeout_ms;
+        }
     }
 
     if (sw_backend_init(mgr) != 0) {
         s_array_clear(&mgr->listeners);
         s_array_clear(&mgr->connections);
+        s_array_clear(&mgr->timers);
         free(mgr);
         sw_socket_runtime_release();
         return NULL;
@@ -1595,14 +2051,42 @@ sw_mgr* sw_mgr_create(const sw_http_config* config) {
 }
 
 void sw_mgr_destroy(sw_mgr* mgr) {
+    sw_mgr_destroy_internal(mgr);
+}
+
+void sw_server_destroy(sw_server* server) {
+    sw_mgr_destroy_internal(server);
+}
+
+static void sw_mgr_destroy_internal(sw_mgr* mgr) {
+    sz worker_index;
+
     if (mgr == NULL) {
         return;
+    }
+
+    if (mgr->is_server_owner) {
+        sw_server_stop(mgr);
+        sw_server_wait(mgr);
     }
 
     while (s_array_get_size(&mgr->connections) > 0) {
         sw_connection* connection = s_array_get_data(&mgr->connections)[0];
         sw_mgr_close_connection(mgr, connection);
     }
+
+    for (worker_index = 0; worker_index < mgr->worker_count; ++worker_index) {
+        sw_worker* worker = &mgr->workers[worker_index];
+        if (worker->mgr != NULL) {
+            sw_mgr_destroy_internal(worker->mgr);
+            worker->mgr = NULL;
+        }
+        s_array_clear(&worker->pending);
+        s_mutex_destroy(&worker->pending_lock);
+    }
+    free(mgr->workers);
+    mgr->workers = NULL;
+    mgr->worker_count = 0;
 
     while (s_array_get_size(&mgr->listeners) > 0) {
         sw_listener* listener = s_array_get_data(&mgr->listeners)[0];
@@ -1620,6 +2104,7 @@ void sw_mgr_destroy(sw_mgr* mgr) {
     sw_backend_shutdown(mgr);
     s_array_clear(&mgr->listeners);
     s_array_clear(&mgr->connections);
+    s_array_clear(&mgr->timers);
     free(mgr);
     sw_socket_runtime_release();
 }
@@ -1640,7 +2125,7 @@ i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* us
         return -1;
     }
 
-    listener_fd = sw_create_listener_socket(host, port, &bound_port);
+    listener_fd = sw_create_listener_socket(host, port, mgr->config.listen_backlog, &bound_port);
     if (listener_fd == SW_INVALID_SOCKET) {
         return -1;
     }
@@ -1669,6 +2154,10 @@ i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* us
     }
 
     return 0;
+}
+
+i32 sw_server_add_http(sw_server* server, const c8* url, sw_http_handler handler, void* user_data) {
+    return sw_http_listen(server, url, handler, user_data);
 }
 
 i32 sw_http_listen_tls(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data) {
@@ -1700,7 +2189,7 @@ i32 sw_http_listen_tls(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_
         return -1;
     }
 
-    listener_fd = sw_create_listener_socket(host, port, &bound_port);
+    listener_fd = sw_create_listener_socket(host, port, mgr->config.listen_backlog, &bound_port);
     if (listener_fd == SW_INVALID_SOCKET) {
         sw_tls_context_free(tls_ctx);
         return -1;
@@ -1745,6 +2234,10 @@ i32 sw_http_listen_tls(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_
 #endif
 }
 
+i32 sw_server_add_https(sw_server* server, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data) {
+    return sw_http_listen_tls(server, url, tls, handler, user_data);
+}
+
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body) {
     if (connection == NULL) {
         return -1;
@@ -1758,91 +2251,17 @@ static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code,
     return 0;
 }
 
-static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connection* connection, f64 now_ms) {
-    f64 remaining_ms = -1.0;
-    b8 has_timeout = 0;
-
-    if (mgr == NULL || connection == NULL) {
-        return -1;
-    }
-
-    if (connection->write_shutdown) {
-        if (mgr->config.idle_timeout_ms > 0) {
-            const f64 idle_remaining_ms = (f64)mgr->config.idle_timeout_ms - (now_ms - connection->last_activity_at_ms);
-            if (idle_remaining_ms <= 0.0) {
-                return 0;
-            }
-            if (idle_remaining_ms > (f64)INT_MAX) {
-                return INT_MAX;
-            }
-            return (i32)idle_remaining_ms;
-        }
-        return -1;
-    }
-
-    if (connection->close_after_write && sw_connection_has_pending_output(connection)) {
-        return -1;
-    }
-
-#if defined(SYPHAX_WEB_HAS_TLS)
-    if (sw_connection_tls_handshake_pending(connection) && connection->tls_handshake_timeout_ms > 0) {
-        remaining_ms = (f64)connection->tls_handshake_timeout_ms - (now_ms - connection->tls_handshake_started_at_ms);
-        has_timeout = 1;
-    }
-#endif
-
-    if (!connection->request_ready
-#if defined(SYPHAX_WEB_HAS_TLS)
-        && !sw_connection_tls_handshake_pending(connection)
-#endif
-    ) {
-        const i32 phase_timeout_ms = connection->headers_complete ? mgr->config.body_timeout_ms : mgr->config.header_timeout_ms;
-        if (phase_timeout_ms > 0) {
-            const f64 phase_remaining_ms = (f64)phase_timeout_ms - (now_ms - connection->phase_started_at_ms);
-            if (!has_timeout || phase_remaining_ms < remaining_ms) {
-                remaining_ms = phase_remaining_ms;
-            }
-            has_timeout = 1;
-        }
-    }
-
-    if (mgr->config.idle_timeout_ms > 0) {
-        const f64 idle_remaining_ms = (f64)mgr->config.idle_timeout_ms - (now_ms - connection->last_activity_at_ms);
-        if (!has_timeout || idle_remaining_ms < remaining_ms) {
-            remaining_ms = idle_remaining_ms;
-        }
-        has_timeout = 1;
-    }
-
-    if (!has_timeout) {
-        return -1;
-    }
-    if (remaining_ms <= 0.0) {
-        return 0;
-    }
-    if (remaining_ms > (f64)INT_MAX) {
-        return INT_MAX;
-    }
-    return (i32)remaining_ms;
-}
-
-static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms) {
+static i32 sw_mgr_effective_poll_timeout(sw_mgr* mgr, i32 timeout_ms) {
     i32 effective_timeout_ms = timeout_ms;
     const f64 now_ms = sw_now_ms();
-    sw_connection* const* connections;
-    sz i;
+    sw_timer_entry entry;
 
     if (mgr == NULL) {
         return timeout_ms;
     }
-    connections = (sw_connection* const*)s_array_get_data((sw_connection_array*)&mgr->connections);
-
-    for (i = 0; i < s_array_get_size(&mgr->connections); ++i) {
-        sw_connection* connection = connections[i];
-        const i32 remaining_ms = sw_connection_remaining_timeout_ms(mgr, connection, now_ms);
-        if (remaining_ms < 0) {
-            continue;
-        }
+    if (sw_mgr_peek_timer(mgr, now_ms, &entry)) {
+        const f64 remaining = entry.due_ms - now_ms;
+        const i32 remaining_ms = remaining <= 0.0 ? 0 : (remaining > (f64)INT_MAX ? INT_MAX : (i32)remaining);
         if (effective_timeout_ms < 0 || remaining_ms < effective_timeout_ms) {
             effective_timeout_ms = remaining_ms;
         }
@@ -1851,41 +2270,54 @@ static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms) {
     return effective_timeout_ms;
 }
 
-static void sw_mgr_enforce_timeouts(sw_mgr* mgr) {
+static void sw_mgr_expire_timeouts(sw_mgr* mgr) {
     const f64 now_ms = sw_now_ms();
-    sz i = 0;
 
     if (mgr == NULL) {
         return;
     }
 
-    while (i < s_array_get_size(&mgr->connections)) {
-        sw_connection* connection = s_array_get_data(&mgr->connections)[i];
-        const i32 remaining_ms = sw_connection_remaining_timeout_ms(mgr, connection, now_ms);
+    for (;;) {
+        sw_timer_entry entry;
+        sw_connection* connection;
 
-        if (remaining_ms == 0) {
-            if (connection->write_shutdown) {
-                sw_mgr_close_connection(mgr, connection);
-                continue;
-            }
-#if defined(SYPHAX_WEB_HAS_TLS)
-            if (sw_connection_tls_handshake_pending(connection)) {
-                sw_mgr_close_connection(mgr, connection);
-                continue;
-            }
-#endif
-            if (sw_connection_discard_available_plain_input(mgr, connection) < 0) {
-                continue;
-            }
-            if (sw_http_reply_status_text(connection, 408, "Request Timeout") != 0) {
-                continue;
-            }
-            if (sw_connection_has_pending_output(connection)
-                && sw_mgr_connection_writable(mgr, connection) < 0) {
-                continue;
-            }
+        if (!sw_mgr_peek_timer(mgr, now_ms, &entry) || entry.due_ms > now_ms) {
+            break;
         }
-        ++i;
+        sw_timer_heap_pop(&mgr->timers, NULL);
+        {
+            sw_connection** connection_slot = s_array_get(&mgr->connections, entry.connection_handle);
+            connection = connection_slot != NULL ? *connection_slot : NULL;
+        }
+        if (connection == NULL || connection->timer_generation != entry.generation) {
+            continue;
+        }
+
+        if (connection->write_shutdown || sw_connection_has_pending_output(connection)) {
+            sw_mgr_close_connection(mgr, connection);
+            continue;
+        }
+#if defined(SYPHAX_WEB_HAS_TLS)
+        if (sw_connection_tls_handshake_pending(connection)) {
+            sw_mgr_close_connection(mgr, connection);
+            continue;
+        }
+#endif
+        if (!connection->request_started) {
+            sw_mgr_close_connection(mgr, connection);
+            continue;
+        }
+        connection->must_close = 1;
+        if (sw_connection_discard_available_plain_input(mgr, connection) < 0) {
+            continue;
+        }
+        if (sw_http_reply_status_text(connection, 408, "Request Timeout") != 0) {
+            continue;
+        }
+        if (sw_connection_has_pending_output(connection)
+            && sw_mgr_connection_writable(mgr, connection) < 0) {
+            continue;
+        }
     }
 }
 
@@ -1895,15 +2327,15 @@ i32 sw_mgr_poll(sw_mgr* mgr, i32 timeout_ms) {
     if (mgr == NULL || mgr->stop_requested) {
         return 0;
     }
-    sw_mgr_enforce_timeouts(mgr);
-    sw_mgr_flush_pending_output(mgr);
+    sw_mgr_drain_pending_connections(mgr);
+    sw_mgr_expire_timeouts(mgr);
     timeout_ms = sw_mgr_effective_poll_timeout(mgr, timeout_ms);
     rc = sw_backend_poll(mgr, timeout_ms);
     if (rc < 0) {
         return -1;
     }
-    sw_mgr_enforce_timeouts(mgr);
-    sw_mgr_flush_pending_output(mgr);
+    sw_mgr_drain_pending_connections(mgr);
+    sw_mgr_expire_timeouts(mgr);
     return rc;
 }
 
@@ -1913,8 +2345,26 @@ void sw_mgr_request_stop(sw_mgr* mgr) {
     }
 }
 
+void sw_server_stop(sw_server* server) {
+    sz worker_index;
+
+    if (server == NULL) {
+        return;
+    }
+    server->stop_requested = 1;
+    for (worker_index = 0; worker_index < server->worker_count; ++worker_index) {
+        if (server->workers[worker_index].mgr != NULL) {
+            server->workers[worker_index].mgr->stop_requested = 1;
+        }
+    }
+}
+
 b8 sw_mgr_is_running(const sw_mgr* mgr) {
     return mgr != NULL && !mgr->stop_requested;
+}
+
+b8 sw_server_is_running(const sw_server* server) {
+    return sw_mgr_is_running(server);
 }
 
 u16 sw_mgr_get_listener_port(const sw_mgr* mgr, sz listener_index) {
@@ -1926,26 +2376,213 @@ u16 sw_mgr_get_listener_port(const sw_mgr* mgr, sz listener_index) {
     return listeners[listener_index]->bound_port;
 }
 
+u16 sw_server_get_listener_port(const sw_server* server, sz listener_index) {
+    return sw_mgr_get_listener_port(server, listener_index);
+}
+
+sz sw_server_open_connections(const sw_server* server) {
+    return sw_mgr_active_connections(server);
+}
+
+sz sw_server_worker_count(const sw_server* server) {
+    return server != NULL ? server->worker_count : 0;
+}
+
+sz sw_server_worker_open_connections(const sw_server* server, sz worker_index) {
+    if (server == NULL || worker_index >= server->worker_count || server->workers[worker_index].mgr == NULL) {
+        return 0;
+    }
+    return s_array_get_size(&server->workers[worker_index].mgr->connections);
+}
+
+sz sw_server_worker_accepted_connections(const sw_server* server, sz worker_index) {
+    if (server == NULL || worker_index >= server->worker_count) {
+        return 0;
+    }
+    return server->workers[worker_index].accepted_count;
+}
+
+static void* sw_worker_thread_main(void* arg) {
+    sw_worker* worker = (sw_worker*)arg;
+
+    while (worker != NULL && worker->owner != NULL && sw_mgr_is_running(worker->owner)) {
+        if (sw_mgr_poll(worker->mgr, 50) < 0) {
+            worker->owner->stop_requested = 1;
+            break;
+        }
+    }
+
+    return NULL;
+}
+
+static void* sw_accept_thread_main(void* arg) {
+    sw_mgr* server = (sw_mgr*)arg;
+
+    while (sw_mgr_is_running(server)) {
+        if (sw_mgr_poll(server, 50) < 0) {
+            server->stop_requested = 1;
+            break;
+        }
+    }
+    sw_server_stop(server);
+    return NULL;
+}
+
+static i32 sw_server_start_workers(sw_mgr* server) {
+    sz worker_index;
+    const sz desired_workers = server != NULL ? server->config.worker_count : 0;
+
+    if (server == NULL) {
+        return -1;
+    }
+    if (server->worker_count > 0) {
+        return 0;
+    }
+    if (desired_workers == 0) {
+        return 0;
+    }
+
+    server->workers = (sw_worker*)calloc(desired_workers, sizeof(*server->workers));
+    if (server->workers == NULL) {
+        return -1;
+    }
+    for (worker_index = 0; worker_index < desired_workers; ++worker_index) {
+        sw_worker* worker = &server->workers[worker_index];
+        worker->owner = server;
+        s_array_init(&worker->pending);
+        if (!s_mutex_init(&worker->pending_lock)) {
+            return -1;
+        }
+        server->worker_count += 1;
+        worker->mgr = sw_mgr_create_internal(&server->config, 0, server, worker);
+        if (worker->mgr == NULL) {
+            return -1;
+        }
+        if (!s_thread_create(&worker->thread, sw_worker_thread_main, worker)) {
+            return -1;
+        }
+        worker->thread_started = 1;
+    }
+
+    return 0;
+}
+
+static void sw_server_join_workers(sw_mgr* server) {
+    sz worker_index;
+
+    if (server == NULL) {
+        return;
+    }
+
+    for (worker_index = 0; worker_index < server->worker_count; ++worker_index) {
+        sw_worker* worker = &server->workers[worker_index];
+        if (worker->thread_started) {
+            (void)s_thread_join(&worker->thread, NULL);
+            worker->thread_started = 0;
+        }
+    }
+}
+
+static void sw_mgr_close_all_connections(sw_mgr* mgr) {
+    if (mgr == NULL) {
+        return;
+    }
+    while (s_array_get_size(&mgr->connections) > 0) {
+        sw_connection* connection = s_array_get_data(&mgr->connections)[0];
+        sw_mgr_close_connection(mgr, connection);
+    }
+}
+
+static void sw_server_close_worker_connections(sw_mgr* server) {
+    sz worker_index;
+
+    if (server == NULL) {
+        return;
+    }
+    sw_mgr_close_all_connections(server);
+    for (worker_index = 0; worker_index < server->worker_count; ++worker_index) {
+        sw_mgr_close_all_connections(server->workers[worker_index].mgr);
+    }
+}
+
+i32 sw_server_start(sw_server* server) {
+    if (server == NULL || server->accept_thread_started || server->running_foreground) {
+        return -1;
+    }
+    server->stop_requested = 0;
+    if (sw_server_start_workers(server) != 0) {
+        sw_server_stop(server);
+        return -1;
+    }
+    if (!s_thread_create(&server->accept_thread, sw_accept_thread_main, server)) {
+        sw_server_stop(server);
+        sw_server_join_workers(server);
+        return -1;
+    }
+    server->accept_thread_started = 1;
+    server->server_started = 1;
+    return 0;
+}
+
+i32 sw_server_wait(sw_server* server) {
+    if (server == NULL) {
+        return -1;
+    }
+    if (server->accept_thread_started) {
+        (void)s_thread_join(&server->accept_thread, NULL);
+        server->accept_thread_started = 0;
+    }
+    sw_server_stop(server);
+    sw_server_join_workers(server);
+    sw_server_close_worker_connections(server);
+    server->server_started = 0;
+    return 0;
+}
+
+i32 sw_server_poll(sw_server* server, i32 timeout_ms) {
+    return sw_mgr_poll(server, timeout_ms);
+}
+
+i32 sw_server_run(sw_server* server) {
+    i32 rc;
+
+    if (server == NULL || server->accept_thread_started || server->running_foreground) {
+        return -1;
+    }
+    server->stop_requested = 0;
+    if (sw_server_start_workers(server) != 0) {
+        sw_server_stop(server);
+        return -1;
+    }
+    server->running_foreground = 1;
+    rc = sw_server_run_loop(server);
+    server->running_foreground = 0;
+    sw_server_stop(server);
+    sw_server_join_workers(server);
+    sw_server_close_worker_connections(server);
+    return rc;
+}
+
 i32 sw_server_listen(const c8* url, const sw_http_config* config, sw_http_handler handler, void* user_data) {
-    sw_mgr* mgr = sw_mgr_create(config);
+    sw_server* mgr = sw_server_create(config);
     int rc;
 
     if (mgr == NULL) {
         return -1;
     }
 
-    rc = sw_http_listen(mgr, url, handler, user_data);
+    rc = sw_server_add_http(mgr, url, handler, user_data);
     if (rc != 0) {
-        sw_mgr_destroy(mgr);
+        sw_server_destroy(mgr);
         return rc;
     }
 
     rc = sw_server_run(mgr);
-    sw_mgr_destroy(mgr);
+    sw_server_destroy(mgr);
     return rc;
 }
 
-static i32 sw_server_run(sw_mgr* mgr) {
+static i32 sw_server_run_loop(sw_mgr* mgr) {
     i32 rc = 0;
 
     if (mgr == NULL) {
@@ -1985,21 +2622,21 @@ i32 sw_server_listen_tls(
     sw_http_handler handler,
     void* user_data
 ) {
-    sw_mgr* mgr = sw_mgr_create(config);
+    sw_server* mgr = sw_server_create(config);
     int rc;
 
     if (mgr == NULL) {
         return -1;
     }
 
-    rc = sw_http_listen_tls(mgr, url, tls, handler, user_data);
+    rc = sw_server_add_https(mgr, url, tls, handler, user_data);
     if (rc != 0) {
-        sw_mgr_destroy(mgr);
+        sw_server_destroy(mgr);
         return rc;
     }
 
     rc = sw_server_run(mgr);
-    sw_mgr_destroy(mgr);
+    sw_server_destroy(mgr);
     return rc;
 }
 
@@ -2112,6 +2749,40 @@ static b8 sw_cookie_append_options(sw_char_array* out, sw_connection* connection
     return 1;
 }
 
+static b8 sw_request_allows_keep_alive(const sw_connection* connection) {
+    const c8* connection_header;
+    const sw_http_message* request;
+
+    if (connection == NULL || connection->mgr == NULL) {
+        return 0;
+    }
+    if (connection->must_close || connection->write_shutdown) {
+        return 0;
+    }
+    if (connection->mgr->config.keep_alive_max_requests > 0
+        && connection->handled_requests + 1 >= connection->mgr->config.keep_alive_max_requests) {
+        return 0;
+    }
+
+    request = &connection->request;
+    connection_header = sw_http_header_get(request, "Connection");
+    if (request->proto != NULL && sw_stricmp_ascii(request->proto, "HTTP/1.0") == 0) {
+        return connection_header != NULL && sw_strcasestr_ascii(connection_header, "keep-alive") != NULL;
+    }
+    if (connection_header != NULL && sw_strcasestr_ascii(connection_header, "close") != NULL) {
+        return 0;
+    }
+    return 1;
+}
+
+static void sw_connection_prepare_response(sw_connection* connection) {
+    if (connection == NULL) {
+        return;
+    }
+    connection->response_started = 1;
+    connection->close_after_write = !sw_request_allows_keep_alive(connection);
+}
+
 static i32 sw_http_queue_header(sw_connection* connection, const c8* name, const c8* value) {
     sw_http_header header;
 
@@ -2131,6 +2802,36 @@ static i32 sw_http_queue_header(sw_connection* connection, const c8* name, const
     }
     s_array_add(&connection->response_headers, header);
     return 0;
+}
+
+static b8 sw_connection_can_append_output(const sw_connection* connection, sz add_len) {
+    const sz current = connection != NULL ? sw_char_array_size(&connection->write_buffer) : 0;
+    const sz max_size = (connection != NULL && connection->mgr != NULL) ? connection->mgr->config.max_write_buffer_bytes : 0;
+
+    if (connection == NULL) {
+        return 0;
+    }
+    if (max_size == 0) {
+        return 1;
+    }
+    if (add_len > SIZE_MAX - current) {
+        return 0;
+    }
+    return current + add_len <= max_size;
+}
+
+static b8 sw_connection_append_output(sw_connection* connection, const void* data, sz data_len) {
+    if (data_len == 0) {
+        return 1;
+    }
+    if (!sw_connection_can_append_output(connection, data_len)) {
+        return 0;
+    }
+    return sw_char_array_append_bytes(&connection->write_buffer, data, data_len);
+}
+
+static b8 sw_connection_append_output_cstr(sw_connection* connection, const c8* text) {
+    return text == NULL || sw_connection_append_output(connection, text, strlen(text));
 }
 
 sw_http_cookie sw_http_cookie_default(void) {
@@ -2206,38 +2907,50 @@ static int sw_connection_begin_response(sw_connection* connection, i32 status_co
     }
 
     sw_char_array_reset(&connection->write_buffer);
-    connection->close_after_write = 1;
+    sw_connection_prepare_response(connection);
 
     written = snprintf(line, sizeof(line), "HTTP/1.1 %d %s\r\n", status_code, sw_http_status_text(status_code));
     if (written < 0 || (sz)written >= sizeof(line)
-        || !sw_char_array_append_bytes(&connection->write_buffer, line, (sz)written)
-        || !sw_char_array_append_cstr(&connection->write_buffer, "Content-Type: ")
-        || !sw_char_array_append_cstr(&connection->write_buffer, (content_type != NULL) ? content_type : "text/plain; charset=utf-8")
-        || !sw_char_array_append_cstr(&connection->write_buffer, "\r\n")) {
+        || !sw_connection_append_output(connection, line, (sz)written)
+        || !sw_connection_append_output_cstr(connection, "Content-Type: ")
+        || !sw_connection_append_output_cstr(connection, (content_type != NULL) ? content_type : "text/plain; charset=utf-8")
+        || !sw_connection_append_output_cstr(connection, "\r\n")) {
         sw_connection_clear_response_headers(connection);
         return -1;
     }
 
     written = snprintf(line, sizeof(line), "Content-Length: %zu\r\n", content_length);
     if (written < 0 || (sz)written >= sizeof(line)
-        || !sw_char_array_append_bytes(&connection->write_buffer, line, (sz)written)) {
+        || !sw_connection_append_output(connection, line, (sz)written)) {
         sw_connection_clear_response_headers(connection);
         return -1;
     }
 
     for (i = 0; i < s_array_get_size(&connection->response_headers); ++i) {
         sw_http_header* header = &s_array_get_data(&connection->response_headers)[i];
-        if (!sw_char_array_append_cstr(&connection->write_buffer, header->name)
-            || !sw_char_array_append_cstr(&connection->write_buffer, ": ")
-            || !sw_char_array_append_cstr(&connection->write_buffer, header->value)
-            || !sw_char_array_append_cstr(&connection->write_buffer, "\r\n")) {
+        if (!sw_connection_append_output_cstr(connection, header->name)
+            || !sw_connection_append_output_cstr(connection, ": ")
+            || !sw_connection_append_output_cstr(connection, header->value)
+            || !sw_connection_append_output_cstr(connection, "\r\n")) {
             sw_connection_clear_response_headers(connection);
             return -1;
         }
     }
 
     sw_connection_clear_response_headers(connection);
-    return sw_char_array_append_cstr(&connection->write_buffer, "Connection: close\r\n\r\n") ? 0 : -1;
+    if (connection->close_after_write) {
+        return sw_connection_append_output_cstr(connection, "Connection: close\r\n\r\n") ? 0 : -1;
+    }
+
+    if (connection->mgr != NULL && connection->mgr->config.idle_timeout_ms > 0) {
+        written = snprintf(line, sizeof(line), "Connection: keep-alive\r\nKeep-Alive: timeout=%d, max=%zu\r\n\r\n",
+            connection->mgr->config.idle_timeout_ms / 1000,
+            connection->mgr->config.keep_alive_max_requests);
+        return written >= 0 && (sz)written < sizeof(line)
+            && sw_connection_append_output(connection, line, (sz)written) ? 0 : -1;
+    }
+
+    return sw_connection_append_output_cstr(connection, "Connection: keep-alive\r\n\r\n") ? 0 : -1;
 }
 
 i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_type, const void* body, sz body_len) {
@@ -2247,7 +2960,7 @@ i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_
     if (sw_connection_begin_response(connection, status_code, content_type, body_len) != 0) {
         return -1;
     }
-    if (body_len > 0 && !sw_char_array_append_bytes(&connection->write_buffer, body, body_len)) {
+    if (body_len > 0 && !sw_connection_append_output(connection, body, body_len)) {
         return -1;
     }
     sw_connection_mark_activity(connection, sw_now_ms());
@@ -2281,7 +2994,9 @@ i32 sw_http_write(sw_connection* connection, const void* data, sz data_len) {
     if (connection == NULL) {
         return -1;
     }
-    if (!sw_char_array_append_bytes(&connection->write_buffer, data, data_len)) {
+    connection->must_close = 1;
+    connection->close_after_write = 1;
+    if (!sw_connection_append_output(connection, data, data_len)) {
         return -1;
     }
     sw_connection_mark_activity(connection, sw_now_ms());
@@ -2300,7 +3015,9 @@ i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...) {
     ok = sw_char_array_append_vformat(&connection->write_buffer, fmt, ap);
     va_end(ap);
 
-    if (!ok) {
+    connection->must_close = 1;
+    connection->close_after_write = 1;
+    if (!ok || !sw_connection_can_append_output(connection, 0)) {
         return -1;
     }
     sw_connection_mark_activity(connection, sw_now_ms());

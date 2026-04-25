@@ -304,7 +304,7 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 }
 
 int main(void) {
-    sw_http_config http = http_config();
+    sw_server_config http = server_config();
     sw_session_config sessions = sw_session_config_default();
     app_state state;
     i32 rc;

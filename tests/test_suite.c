@@ -58,6 +58,8 @@ typedef struct {
     b8 closed;
 } sw_test_response;
 
+static b8 response_has_complete_body(const sw_test_response* response);
+
 #if defined(SYPHAX_WEB_HAS_TLS)
 static void write_test_tls_files(const char* cert_path, const char* key_path) {
     EVP_PKEY* pkey = NULL;
@@ -1092,6 +1094,10 @@ static sw_test_response issue_request(sw_mgr* mgr, u16 port, const c8* request) 
             memcpy(response.data + response_len, chunk, (sz)received);
             response_len += (sz)received;
             response.data[response_len] = '\0';
+            response.size = response_len;
+            if (response_has_complete_body(&response)) {
+                break;
+            }
             continue;
         }
         if (received == 0) {
@@ -1135,6 +1141,10 @@ static sw_test_response issue_request_bytes(sw_mgr* mgr, u16 port, const void* r
             memcpy(response.data + response_len, chunk, (sz)received);
             response_len += (sz)received;
             response.data[response_len] = '\0';
+            response.size = response_len;
+            if (response_has_complete_body(&response)) {
+                break;
+            }
             continue;
         }
         if (received == 0) {
@@ -1179,6 +1189,10 @@ static sw_test_response read_response_from_socket(sw_mgr* mgr, sw_test_socket fd
             memcpy(response.data + response_len, chunk, (sz)received);
             response_len += (sz)received;
             response.data[response_len] = '\0';
+            response.size = response_len;
+            if (response_has_complete_body(&response)) {
+                break;
+            }
             continue;
         }
         if (received == 0) {
@@ -1192,6 +1206,70 @@ static sw_test_response read_response_from_socket(sw_mgr* mgr, sw_test_socket fd
 #endif
             break;
         }
+    }
+
+    response.size = response_len;
+    return response;
+}
+
+static b8 wait_socket_closed(sw_mgr* mgr, sw_test_socket fd, int max_attempts, i32 poll_ms, i32 sleep_ms) {
+    int attempts;
+
+    for (attempts = 0; attempts < max_attempts; ++attempts) {
+        char chunk[256];
+        int received;
+        if (sleep_ms > 0) {
+            sw_test_sleep_ms(sleep_ms);
+        }
+        assert(sw_mgr_poll(mgr, poll_ms) >= 0);
+        received = (int)recv(fd, chunk, sizeof(chunk), 0);
+        if (received == 0) {
+            return 1;
+        }
+        if (received > 0) {
+            continue;
+        }
+#ifdef _WIN32
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+#endif
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static sw_test_response read_response_background(sw_test_socket fd, int max_attempts, i32 sleep_ms) {
+    sw_test_response response = {0};
+    sz response_len = 0;
+    int attempts;
+
+    response.data = (char*)calloc(1, 65536);
+    assert(response.data != NULL);
+    for (attempts = 0; attempts < max_attempts; ++attempts) {
+        char chunk[4096];
+        const int received = (int)recv(fd, chunk, sizeof(chunk), 0);
+        if (received > 0) {
+            memcpy(response.data + response_len, chunk, (sz)received);
+            response_len += (sz)received;
+            response.data[response_len] = '\0';
+            response.size = response_len;
+            if (response_has_complete_body(&response)) {
+                break;
+            }
+            continue;
+        }
+        if (received == 0) {
+            response.closed = 1;
+            break;
+        }
+#ifdef _WIN32
+        assert(WSAGetLastError() == WSAEWOULDBLOCK);
+#else
+        assert(errno == EAGAIN || errno == EWOULDBLOCK);
+#endif
+        sw_test_sleep_ms(sleep_ms);
     }
 
     response.size = response_len;
@@ -1215,9 +1293,16 @@ static sz response_body_size(const sw_test_response* response) {
     return response->size - (sz)(body - response->data);
 }
 
+static b8 response_has_complete_body(const sw_test_response* response) {
+    return response != NULL
+        && response->data != NULL
+        && strstr(response->data, "\r\n\r\n") != NULL
+        && strstr(response->data, "Content-Length:") != NULL
+        && response_content_length(response) == response_body_size(response);
+}
+
 static void assert_complete_response(const sw_test_response* response) {
-    assert(response->closed);
-    assert(response_content_length(response) == response_body_size(response));
+    assert(response_has_complete_body(response));
 }
 
 static void response_cookie_value(const sw_test_response* response, const char* name, char* out, sz out_len) {
@@ -1482,6 +1567,7 @@ static void test_live_server(void) {
     FILE* file;
     u16 port;
     sw_test_response response;
+    sw_test_socket keep_fd;
     int listen_rc;
 
     assert(mgr != NULL);
@@ -1557,6 +1643,43 @@ static void test_live_server(void) {
     assert(strstr(response.data, "<p>Language</p>") != NULL);
     free(response.data);
 
+    keep_fd = connect_to_port(port);
+    assert(send(keep_fd,
+        "GET /health-missing HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        (int)strlen("GET /health-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        0) == (int)strlen("GET /health-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    response = read_response_from_socket(mgr, keep_fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(!response.closed);
+    assert(strstr(response.data, "HTTP/1.1 404 Not Found") != NULL);
+    assert(strstr(response.data, "Connection: keep-alive") != NULL);
+    free(response.data);
+
+    assert(send(keep_fd,
+        "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        0) == (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    response = read_response_from_socket(mgr, keep_fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Content-Type: text/css; charset=utf-8") != NULL);
+    assert(strstr(response.data, "body { color: #fff; }") != NULL);
+    free(response.data);
+
+    assert(send(keep_fd,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        (int)strlen("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+        0) == (int)strlen("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
+    response = read_response_from_socket(mgr, keep_fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Connection: close") != NULL);
+    free(response.data);
+    assert(wait_socket_closed(mgr, keep_fd, 80, 5, 1));
+#ifdef _WIN32
+    closesocket(keep_fd);
+#else
+    close(keep_fd);
+#endif
+
     response = issue_request(mgr, port, "GET /file HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "public payload") != NULL);
@@ -1579,7 +1702,7 @@ static void test_live_server(void) {
     assert(strstr(response.data, "HTTP/1.1 404 Not Found") != NULL);
     free(response.data);
 
-    assert(state.request_count == 10);
+    assert(state.request_count == 13);
     remove(file_path);
 #ifdef _WIN32
     RemoveDirectoryA(docroot_path);
@@ -1980,7 +2103,7 @@ static void test_token_helpers(void) {
 }
 
 static void test_server_config(void) {
-    sw_http_config config = sw_http_config_default();
+    sw_server_config config = sw_server_config_default();
     sw_mgr* mgr;
     sw_test_server_state state = {0};
     u16 port;
@@ -2069,6 +2192,106 @@ static void test_server_config(void) {
 #endif
 
     sw_mgr_destroy(mgr);
+}
+
+static void test_server_keep_alive_and_limits(void) {
+    sw_server_config config = sw_server_config_default();
+    sw_mgr* mgr;
+    sw_test_server_state state = {0};
+    sw_test_socket fd;
+    sw_test_socket rejected_fd;
+    sw_test_response response;
+    u16 port;
+
+    config.keep_alive_max_requests = 2;
+    config.max_connections = 1;
+    config.idle_timeout_ms = 1000;
+
+    mgr = sw_mgr_create(&config);
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    fd = connect_to_port(port);
+    assert(send(fd,
+        "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        (int)strlen("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        0) == (int)strlen("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    response = read_response_from_socket(mgr, fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Connection: keep-alive") != NULL);
+    assert(sw_server_open_connections(mgr) == 1);
+    free(response.data);
+
+    rejected_fd = connect_to_port(port);
+    assert(wait_socket_closed(mgr, rejected_fd, 80, 5, 1));
+#ifdef _WIN32
+    closesocket(rejected_fd);
+#else
+    close(rejected_fd);
+#endif
+
+    assert(send(fd,
+        "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        0) == (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    response = read_response_from_socket(mgr, fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Connection: close") != NULL);
+    free(response.data);
+    assert(wait_socket_closed(mgr, fd, 80, 5, 1));
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+
+    sw_mgr_destroy(mgr);
+}
+
+static void test_server_loop_shards(void) {
+    sw_server_config config = sw_server_config_default();
+    sw_server* server;
+    sw_test_server_state state = {0};
+    sw_test_socket sockets[4];
+    u16 port;
+    sz i;
+
+    config.worker_count = 2;
+    config.idle_timeout_ms = 1000;
+
+    server = sw_server_create(&config);
+    assert(server != NULL);
+    assert(sw_server_add_http(server, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_server_get_listener_port(server, 0);
+    assert(port != 0);
+    assert(sw_server_start(server) == 0);
+
+    for (i = 0; i < 4; ++i) {
+        sw_test_response response;
+        sockets[i] = connect_to_port(port);
+        assert(send(sockets[i],
+            "GET /style.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+            0) == (int)strlen("GET /style.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
+        response = read_response_background(sockets[i], 200, 2);
+        assert_complete_response(&response);
+        assert(strstr(response.data, "body { color: #fff; }") != NULL);
+        free(response.data);
+#ifdef _WIN32
+        closesocket(sockets[i]);
+#else
+        close(sockets[i]);
+#endif
+    }
+
+    sw_server_stop(server);
+    assert(sw_server_wait(server) == 0);
+    assert(sw_server_worker_count(server) == 2);
+    assert(sw_server_worker_accepted_connections(server, 0) > 0);
+    assert(sw_server_worker_accepted_connections(server, 1) > 0);
+    sw_server_destroy(server);
 }
 
 static void test_tls_support(void) {
@@ -2167,6 +2390,8 @@ static const sw_named_test sw_named_tests[] = {
     { "session_helpers", test_session_helpers },
     { "token_helpers", test_token_helpers },
     { "server_config", test_server_config },
+    { "server_keep_alive_and_limits", test_server_keep_alive_and_limits },
+    { "server_loop_shards", test_server_loop_shards },
     { "tls_support", test_tls_support }
 };
 

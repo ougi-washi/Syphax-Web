@@ -11,6 +11,7 @@
 #endif
 
 #include "syphax/s_array.h"
+#include "syphax/s_thread.h"
 #include "sw_server.h"
 #include "sw_translator.h"
 
@@ -52,6 +53,26 @@ typedef s_array(sw_http_header, sw_http_header_array);
 typedef s_array(sw_listener*, sw_listener_array);
 typedef s_array(sw_connection*, sw_connection_array);
 typedef s_array(sw_language, sw_languages);
+
+typedef struct sw_worker sw_worker;
+
+typedef struct {
+    f64 due_ms;
+    s_handle connection_handle;
+    u64 generation;
+} sw_timer_entry;
+
+typedef s_array(sw_timer_entry, sw_timer_array);
+
+typedef struct {
+    sw_socket fd;
+    sw_listener* listener;
+    c8 remote_ip[64];
+    u16 remote_port;
+    b8 counted;
+} sw_pending_connection;
+
+typedef s_array(sw_pending_connection, sw_pending_connection_array);
 
 typedef struct {
     c8* key;
@@ -117,11 +138,18 @@ struct sw_connection {
     sw_http_header_array response_headers;
     sw_http_message request;
     b8 request_ready;
+    b8 request_started;
     b8 headers_complete;
+    b8 response_started;
     b8 close_after_write;
+    b8 must_close;
     b8 write_shutdown;
+    b8 counted;
     FILE* file_stream;
     sz file_remaining;
+    sz parsed_request_bytes;
+    sz handled_requests;
+    u64 timer_generation;
     f64 opened_at_ms;
     f64 phase_started_at_ms;
     f64 last_activity_at_ms;
@@ -144,9 +172,31 @@ struct sw_connection {
 struct sw_mgr {
     sw_listener_array listeners;
     sw_connection_array connections;
-    b8 stop_requested;
-    sw_http_config config;
+    sw_timer_array timers;
+    volatile b8 stop_requested;
+    sw_server_config config;
     sw_backend* backend;
+    struct sw_mgr* root;
+    sw_worker* worker_owner;
+    sw_worker* workers;
+    sz worker_count;
+    sz next_worker;
+    sz active_connection_count;
+    s_thread accept_thread;
+    b8 accept_thread_started;
+    b8 server_started;
+    b8 running_foreground;
+    b8 is_server_owner;
+};
+
+struct sw_worker {
+    sw_mgr* owner;
+    sw_mgr* mgr;
+    s_thread thread;
+    b8 thread_started;
+    s_mutex pending_lock;
+    sw_pending_connection_array pending;
+    sz accepted_count;
 };
 
 char* sw_strdup_cstr(const c8* str);

@@ -68,7 +68,7 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 }
 
 int main(void) {
-    sw_http_config config = http_config();
+    sw_server_config config = server_config();
 
 #if defined(SYPHAX_WEB_HAS_TLS)
     return listen_https(

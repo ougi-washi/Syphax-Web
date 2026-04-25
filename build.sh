@@ -176,6 +176,7 @@ if [ "${clean}" -eq 1 ] || [ "${previous_bin_config}" != "${bin_config}" ]; then
     bin/04_live_queue \
     bin/05_folder_app \
     bin/06_session_login \
+    bin/server_stress \
     bin/syphax_web_tests
 fi
 
@@ -185,6 +186,7 @@ cmake -S . -B "${build_dir}" \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DSYPHAX_WEB_BUILD_EXAMPLES=ON \
   -DSYPHAX_WEB_BUILD_TESTS=ON \
+  -DSYPHAX_WEB_BUILD_STRESS=ON \
   -DSYPHAX_WEB_ENABLE_TLS="${tls_value}" \
   -DSYPHAX_WEB_ENABLE_CRYPTO="${crypto_value}" \
   "${cmake_args[@]}"
