@@ -34,6 +34,11 @@ typedef enum {
     SW_PARSE_TOO_MANY_HEADERS = -4
 } sw_parse_result;
 
+enum {
+    SW_FILE_SEND_CHUNK_BYTES = 16 * 1024,
+    SW_UPLOAD_READ_CHUNK_BYTES = 16 * 1024
+};
+
 #if defined(SYPHAX_WEB_HAS_TLS)
 typedef enum {
     SW_TLS_OP_HANDSHAKE = 0,
@@ -163,6 +168,7 @@ static int sw_mgr_dispatch_connection(
     b8 counted
 );
 static int sw_mgr_drain_pending_connections(sw_mgr* mgr);
+static void sw_worker_clear_pending(sw_mgr* root, sw_worker* worker);
 static void* sw_worker_thread_main(void* arg);
 static void* sw_accept_thread_main(void* arg);
 static i32 sw_server_start_workers(sw_mgr* server);
@@ -1823,7 +1829,7 @@ static int sw_connection_fill_file_buffer(sw_connection* connection) {
     }
 
     while (connection->file_remaining > 0 && sw_char_array_size(&connection->write_buffer) == 0) {
-        c8 chunk[16384];
+        c8 chunk[SW_FILE_SEND_CHUNK_BYTES];
         const sz to_read = (connection->file_remaining < sizeof(chunk)) ? connection->file_remaining : sizeof(chunk);
         const sz read_bytes = fread(chunk, 1, to_read, connection->file_stream);
         if (read_bytes == 0) {
@@ -1955,6 +1961,29 @@ static int sw_mgr_drain_pending_connections(sw_mgr* mgr) {
 
     s_array_clear(&pending);
     return 0;
+}
+
+static void sw_worker_clear_pending(sw_mgr* root, sw_worker* worker) {
+    sz i;
+
+    if (worker == NULL) {
+        return;
+    }
+
+    s_mutex_lock(&worker->pending_lock);
+    for (i = 0; i < s_array_get_size(&worker->pending); ++i) {
+        sw_pending_connection* item = &s_array_get_data(&worker->pending)[i];
+        if (item->fd != SW_INVALID_SOCKET) {
+            sw_socket_close(item->fd);
+            item->fd = SW_INVALID_SOCKET;
+        }
+        if (item->counted) {
+            sw_mgr_release_connection(root);
+            item->counted = 0;
+        }
+    }
+    s_array_clear(&worker->pending);
+    s_mutex_unlock(&worker->pending_lock);
 }
 
 int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
@@ -2359,11 +2388,11 @@ static void sw_mgr_destroy_internal(sw_mgr* mgr) {
 
     for (worker_index = 0; worker_index < mgr->worker_count; ++worker_index) {
         sw_worker* worker = &mgr->workers[worker_index];
+        sw_worker_clear_pending(mgr, worker);
         if (worker->mgr != NULL) {
             sw_mgr_destroy_internal(worker->mgr);
             worker->mgr = NULL;
         }
-        s_array_clear(&worker->pending);
         s_mutex_destroy(&worker->pending_lock);
     }
     free(mgr->workers);
@@ -2783,6 +2812,7 @@ static void sw_server_close_worker_connections(sw_mgr* server) {
     }
     sw_mgr_close_all_connections(server);
     for (worker_index = 0; worker_index < server->worker_count; ++worker_index) {
+        sw_worker_clear_pending(server, &server->workers[worker_index]);
         sw_mgr_close_all_connections(server->workers[worker_index].mgr);
     }
 }
@@ -4186,6 +4216,10 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
         }
 
         if (sw_header_value_matches_name(line, line_len, "Content-Disposition")) {
+            free(mp->name);
+            free(mp->filename);
+            mp->name = NULL;
+            mp->filename = NULL;
             mp->name = sw_parse_disposition_param(line, line_len, "name");
             if (mp->name == NULL) {
                 goto fail;
@@ -4194,6 +4228,8 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
         } else if (sw_header_value_matches_name(line, line_len, "Content-Type")) {
             const c8* colon = memchr(line, ':', line_len);
             if (colon != NULL) {
+                free(mp->content_type);
+                mp->content_type = NULL;
                 mp->content_type = sw_strdup_trimmed_range(colon + 1, line_len - (sz)(colon + 1 - line));
                 if (mp->content_type == NULL) {
                     goto fail;
@@ -4237,7 +4273,7 @@ typedef struct {
     sw_connection* connection;
     sz remaining;
     sz buffered_used;
-    c8 socket_buffer[16384];
+    c8 socket_buffer[SW_UPLOAD_READ_CHUNK_BYTES];
     sz socket_pos;
     sz socket_len;
     f64 deadline_ms;
@@ -4258,7 +4294,7 @@ static int sw_upload_reader_read(sw_upload_reader* reader, c8* out) {
     if (reader->buffered_used < sw_char_array_size(&reader->connection->read_buffer)) {
         *out = sw_char_array_data(&reader->connection->read_buffer)[reader->buffered_used++];
         reader->remaining -= 1;
-        if (reader->buffered_used >= 16384) {
+        if (reader->buffered_used >= SW_UPLOAD_READ_CHUNK_BYTES) {
             sw_upload_reader_consume_buffered(reader);
         }
         return 1;
@@ -4483,15 +4519,24 @@ i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, co
             }
             header_line = sw_char_array_data(&line);
             if (sw_header_value_matches_name(header_line, sw_char_array_size(&line), "Content-Disposition")) {
+                free(part.name);
+                free(part.filename);
+                part.name = NULL;
+                part.filename = NULL;
                 part.name = sw_parse_disposition_param(header_line, sw_char_array_size(&line), "name");
                 part.filename = sw_parse_disposition_param(header_line, sw_char_array_size(&line), "filename");
             } else if (sw_header_value_matches_name(header_line, sw_char_array_size(&line), "Content-Type")) {
                 const c8* colon = memchr(header_line, ':', sw_char_array_size(&line));
                 if (colon != NULL) {
+                    free(part.content_type);
+                    part.content_type = NULL;
                     part.content_type = sw_strdup_trimmed_range(
                         colon + 1,
                         sw_char_array_size(&line) - (sz)(colon + 1 - header_line)
                     );
+                    if (part.content_type == NULL) {
+                        goto done;
+                    }
                 }
             }
         }
@@ -4540,7 +4585,6 @@ i32 sw_http_upload_save(sw_connection* connection, const sw_http_message* hm, co
 done:
     if (out != NULL) {
         fclose(out);
-        remove(path);
     }
     sw_upload_reader_consume_buffered(&reader);
     sw_http_multipart_clear(&part);

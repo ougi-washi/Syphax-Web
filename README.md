@@ -219,6 +219,8 @@ English source text is the fallback. The installed file is `share/syphax_web/tra
 - JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
 - Utility: `sw_matches_query`
 
+Large multipart uploads save only to the path passed to `sw_http_upload_save`; the caller owns that file and cleanup.
+
 ## Examples
 
 Build outputs:

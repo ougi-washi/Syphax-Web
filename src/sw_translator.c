@@ -437,6 +437,7 @@ static b8 sw_translator_store_language(sw_translator* translator, sw_translation
 
 static b8 sw_translator_load_text(sw_translator* translator, const c8* code, const c8* json_text) {
     sw_translation_language loaded;
+    b8 ok;
 
     if (translator == NULL || code == NULL || json_text == NULL) {
         return 0;
@@ -446,7 +447,11 @@ static b8 sw_translator_load_text(sw_translator* translator, const c8* code, con
         return 0;
     }
 
-    return sw_translator_store_language(translator, &loaded);
+    ok = sw_translator_store_language(translator, &loaded);
+    if (!ok) {
+        sw_translation_language_dispose(&loaded);
+    }
+    return ok;
 }
 
 static b8 sw_translator_load_file(sw_translator* translator, const c8* code, const c8* path) {

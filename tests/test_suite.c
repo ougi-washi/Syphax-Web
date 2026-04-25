@@ -48,6 +48,7 @@ typedef struct {
     sz uploaded_size;
     b8 upload_body_pending;
     b8 upload_seen_file;
+    b8 expect_upload_failure;
     int request_count;
 } sw_test_server_state;
 
@@ -62,6 +63,10 @@ typedef struct {
     sz size;
     b8 closed;
 } sw_test_response;
+
+enum {
+    SW_TEST_TRANSFER_CHUNK_BYTES = 16 * 1024
+};
 
 static b8 response_has_complete_body(const sw_test_response* response);
 
@@ -304,6 +309,14 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
 
         if (request->body_pending) {
             assert(state->upload_path != NULL);
+            if (state->expect_upload_failure) {
+                assert(sw_http_upload_save(connection, request, "file", state->upload_path, &state->uploaded_size) != 0);
+                state->upload_body_pending = request->body_pending;
+                sw_http_replyf(connection, 400, "text/plain; charset=utf-8",
+                    "upload failed body_pending=%d",
+                    state->upload_body_pending);
+                return;
+            }
             assert(sw_http_upload_save(connection, request, "file", state->upload_path, &state->uploaded_size) == 0);
             state->upload_body_pending = 1;
             state->upload_seen_file = 1;
@@ -918,6 +931,15 @@ static void test_request_helpers(void) {
         "\r\n"
         "hello\r\n"
         "--demo--\r\n";
+    const c8 duplicate_header_multipart_body[] =
+        "--demo\r\n"
+        "Content-Disposition: form-data; name=\"old\"; filename=\"old.txt\"\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"hello.txt\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n"
+        "x\r\n"
+        "--demo--\r\n";
     const sw_http_message message = {
         .method = "POST",
         .uri = "/upload?q=Jane+Doe&empty=&encoded=A%2FB",
@@ -937,6 +959,16 @@ static void test_request_helpers(void) {
         .body = multipart_body,
         .body_len = sizeof(multipart_body) - 1,
         .content_length = sizeof(multipart_body) - 1
+    };
+    sw_http_message duplicate_header_multipart_message = {
+        .method = "POST",
+        .uri = "/upload",
+        .proto = "HTTP/1.1",
+        .headers = multipart_headers,
+        .num_headers = 1,
+        .body = duplicate_header_multipart_body,
+        .body_len = sizeof(duplicate_header_multipart_body) - 1,
+        .content_length = sizeof(duplicate_header_multipart_body) - 1
     };
     char value[64];
     sz offset = 0;
@@ -988,6 +1020,14 @@ static void test_request_helpers(void) {
     assert(part.content_type == NULL);
     assert(part.data_len == 5);
     assert(memcmp(part.data, "hello", part.data_len) == 0);
+    sw_http_multipart_clear(&part);
+
+    offset = 0;
+    memset(&part, 0, sizeof(part));
+    assert(sw_http_next_multipart(&duplicate_header_multipart_message, &part, &offset) == 1);
+    assert(strcmp(part.name, "file") == 0);
+    assert(strcmp(part.filename, "hello.txt") == 0);
+    assert(strcmp(part.content_type, "application/octet-stream") == 0);
     sw_http_multipart_clear(&part);
 }
 
@@ -1297,7 +1337,7 @@ static void send_all_polled(sw_mgr* mgr, sw_test_socket fd, const void* data, sz
 
     while (sent_total < data_len) {
         const sz remaining = data_len - sent_total;
-        const int send_len = remaining > 16384 ? 16384 : (int)remaining;
+        const int send_len = remaining > SW_TEST_TRANSFER_CHUNK_BYTES ? SW_TEST_TRANSFER_CHUNK_BYTES : (int)remaining;
         const int sent = (int)send(fd, cursor + sent_total, send_len, 0);
 
         if (sent > 0) {
@@ -1331,7 +1371,7 @@ static b8 send_all_socket(sw_test_socket fd, const void* data, sz data_len) {
 
     while (sent_total < data_len) {
         const sz remaining = data_len - sent_total;
-        const int send_len = remaining > 16384 ? 16384 : (int)remaining;
+        const int send_len = remaining > SW_TEST_TRANSFER_CHUNK_BYTES ? SW_TEST_TRANSFER_CHUNK_BYTES : (int)remaining;
         const int sent = (int)send(fd, cursor + sent_total, send_len, 0);
 
         if (sent > 0) {
@@ -1355,7 +1395,7 @@ static b8 send_all_socket(sw_test_socket fd, const void* data, sz data_len) {
 }
 
 static b8 send_upload_fixture_bytes_socket(sw_test_socket fd, sz file_size) {
-    c8 chunk[16384];
+    c8 chunk[SW_TEST_TRANSFER_CHUNK_BYTES];
     sz written = 0;
 
     while (written < file_size) {
@@ -1385,9 +1425,18 @@ static void* upload_sender_main(void* arg) {
     return NULL;
 }
 
+static b8 file_exists(const c8* path) {
+    FILE* file = fopen(path, "rb");
+    if (file == NULL) {
+        return 0;
+    }
+    fclose(file);
+    return 1;
+}
+
 static void assert_upload_fixture_file(const c8* path, sz expected_size) {
     FILE* file = fopen(path, "rb");
-    c8 chunk[16384];
+    c8 chunk[SW_TEST_TRANSFER_CHUNK_BYTES];
     sz checked = 0;
 
     assert(file != NULL);
@@ -2085,6 +2134,86 @@ static void test_large_multipart_upload(void) {
     sw_mgr_destroy(mgr);
 }
 
+static void test_large_multipart_upload_failure_keeps_path(void) {
+    const char boundary[] = "large-upload-boundary";
+    const char prefix[] =
+        "--large-upload-boundary\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"broken.bin\"\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n";
+    const char broken_suffix[] = "\r\nthis-is-not-a-boundary";
+    const sz file_size = 4096;
+    const sz body_len = (sizeof(prefix) - 1) + file_size + (sizeof(broken_suffix) - 1);
+    sw_server_config config = sw_server_config_default();
+    sw_mgr* mgr;
+    sw_test_server_state state = {0};
+    sw_test_socket fd;
+    sw_test_response response;
+    sw_upload_sender sender;
+    s_thread sender_thread;
+    char upload_name[256];
+    char upload_path[512];
+    char request_header[1024];
+    FILE* existing;
+    u16 port;
+
+    config.max_body_bytes = body_len + 1024;
+    config.max_read_buffer_bytes = 4096;
+    config.body_timeout_ms = 1000;
+
+    unique_name("upload.bin", upload_name, sizeof(upload_name));
+    temp_path(upload_path, sizeof(upload_path), upload_name);
+    existing = fopen(upload_path, "wb");
+    assert(existing != NULL);
+    fputs("existing caller file", existing);
+    fclose(existing);
+
+    state.upload_path = upload_path;
+    state.expect_upload_failure = 1;
+
+    mgr = sw_mgr_create(&config);
+    assert(mgr != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    fd = connect_to_port(port);
+    assert(snprintf(request_header, sizeof(request_header),
+        "POST /upload HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: multipart/form-data; boundary=%s\r\n"
+        "Content-Length: %zu\r\n"
+        "\r\n",
+        boundary,
+        body_len) > 0);
+
+    memset(&sender, 0, sizeof(sender));
+    sender.fd = fd;
+    sender.header = request_header;
+    sender.prefix = prefix;
+    sender.suffix = broken_suffix;
+    sender.file_size = file_size;
+    assert(s_thread_create(&sender_thread, upload_sender_main, &sender));
+
+    response = read_response_from_socket(mgr, fd, 120, 5, 1);
+    assert(s_thread_join(&sender_thread, NULL));
+    assert(sender.ok);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 400 Bad Request") != NULL);
+    assert(strstr(response.data, "upload failed") != NULL);
+    free(response.data);
+
+    assert(file_exists(upload_path));
+
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+    remove(upload_path);
+    sw_mgr_destroy(mgr);
+}
+
 static void test_session_helpers(void) {
     sw_session_config config = sw_session_config_default();
     sw_mgr* mgr = sw_mgr_create(NULL);
@@ -2657,8 +2786,11 @@ static void test_server_loop_shards(void) {
     sw_server_stop(server);
     assert(sw_server_wait(server) == 0);
     assert(sw_server_worker_count(server) == 2);
+    assert(sw_server_open_connections(server) == 0);
     assert(sw_server_worker_accepted_connections(server, 0) > 0);
     assert(sw_server_worker_accepted_connections(server, 1) > 0);
+    assert(sw_server_worker_open_connections(server, 0) == 0);
+    assert(sw_server_worker_open_connections(server, 1) == 0);
     sw_server_destroy(server);
 }
 
@@ -2755,6 +2887,7 @@ static const sw_named_test sw_named_tests[] = {
     { "utility_helpers", test_utility_helpers },
     { "live_server", test_live_server },
     { "large_multipart_upload", test_large_multipart_upload },
+    { "large_multipart_upload_failure", test_large_multipart_upload_failure_keeps_path },
     { "cookie_helpers", test_cookie_helpers },
     { "session_helpers", test_session_helpers },
     { "token_helpers", test_token_helpers },
