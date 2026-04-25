@@ -4611,8 +4611,6 @@ void sw_http_multipart_clear(sw_http_multipart* mp) {
 }
 
 static i32 sw_random_bytes(u8* out, sz out_len) {
-    sz done = 0;
-
     if (out == NULL && out_len > 0) {
         return -1;
     }
@@ -4624,6 +4622,7 @@ static i32 sw_random_bytes(u8* out, sz out_len) {
     return BCryptGenRandom(NULL, out, (ULONG)out_len, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
 #else
     {
+        sz done = 0;
         int fd = open("/dev/urandom", O_RDONLY);
         if (fd < 0) {
             return -1;

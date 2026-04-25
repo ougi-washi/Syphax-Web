@@ -1,9 +1,11 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
 set(SYPHAX_WEB_ENABLE_TLS @SYPHAX_WEB_ENABLE_TLS@)
 set(SYPHAX_WEB_ENABLE_CRYPTO @SYPHAX_WEB_ENABLE_CRYPTO@)
 if(SYPHAX_WEB_ENABLE_TLS OR SYPHAX_WEB_ENABLE_CRYPTO)
-    include(CMakeFindDependencyMacro)
     find_dependency(OpenSSL)
 endif()
 
