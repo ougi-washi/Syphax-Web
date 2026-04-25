@@ -1,47 +1,25 @@
 # Syphax-Web
 
-Small C web library.
+Small C web toolkit for server-rendered apps.
 
-- HTTP server
-- optional OpenSSL-backed TLS
+- HTTP/1.1 server
+- optional OpenSSL TLS
 - HTML builder
-- inline JS helpers
-- JSON translations
-
-Library-first. Examples and tests are optional.
-
-## Layout
-
-- `include/` public headers
-- `src/` library code
-- `lib/syphax/` vendored submodule
-- `examples/` sample app
-- `tests/` test suite
+- small JS helpers
+- JSON-backed translations
+- CMake install package
 
 ## Build
 
 ```bash
 ./build.sh
-ctest --test-dir build --output-on-failure
 ```
 
-Enable native HTTPS support with OpenSSL:
+TLS build:
 
 ```bash
 ./build.sh -tls
-ctest --test-dir build-tls --output-on-failure
 ```
-
-Run `./build.sh --help` for build script options. The script reuses the selected build directory, so repeat runs are incremental unless `-clean` is passed.
-
-Repo binaries when examples and tests are enabled:
-
-- `bin/01_http`
-- `bin/02_https`
-- `bin/03_static_site`
-- `bin/04_live_queue`
-- `bin/05_folder_app`
-- `bin/syphax_web_tests`
 
 Install:
 
@@ -49,7 +27,7 @@ Install:
 cmake --install build --prefix /your/prefix
 ```
 
-## CMake
+## Link
 
 ```cmake
 find_package(syphax_web CONFIG REQUIRED)
@@ -70,50 +48,68 @@ static void handler(sw_connection* c, const sw_http_message* hm, void* user_data
         return;
     }
 
-    sw_buffer* buffer = sw_buffer_new();
+    sw_buffer* h = sw_buffer_new();
 
-    sw_html(buffer, sw_attrs(sw_attr("lang", "en")), {
-        sw_body(buffer, sw_attrs(), {
-            sw_h1(buffer, sw_attrs(), {
-                sw_text(buffer, "Syphax Web");
+    sw_html(h, sw_attrs(sw_attr("lang", "en")), {
+        sw_body(h, sw_attrs(), {
+            sw_h1(h, sw_attrs(), {
+                sw_text(h, "Syphax Web");
             });
         });
     });
 
-    sw_http_reply(c, 200, "text/html; charset=utf-8", sw_buffer_data(buffer), sw_buffer_len(buffer));
-    sw_buffer_free(buffer);
+    sw_http_reply(c, 200, "text/html; charset=utf-8", sw_buffer_data(h), sw_buffer_len(h));
+    sw_buffer_free(h);
 }
 
 int main(void) {
-    sw_http_config config = sw_http_config_default();
-    config.max_body_bytes = 256 * 1024;
-    return sw_server_listen("http://0.0.0.0:8000", &config, handler, NULL);
+    return sw_server_listen("http://0.0.0.0:8000", NULL, handler, NULL);
 }
 ```
 
 Open `http://127.0.0.1:8000`.
 
-## HTTPS Server
+Pass `NULL` for default request limits and timeouts. Use `sw_http_config_default()` when you want to override them.
 
-Native TLS is opt-in at build time with `SYPHAX_WEB_ENABLE_TLS=ON`.
+## TLS
+
+Native HTTPS is enabled with `./build.sh -tls`.
 
 ```c
 int main(void) {
-    sw_http_config http = sw_http_config_default();
     sw_tls_config tls = sw_tls_config_default();
 
     tls.certificate_file = "/etc/ssl/example/fullchain.pem";
     tls.private_key_file = "/etc/ssl/example/privkey.pem";
 
-    return sw_server_listen_tls("https://0.0.0.0:8443", &http, &tls, handler, NULL);
+    return sw_server_listen_tls("https://0.0.0.0:8443", NULL, &tls, handler, NULL);
 }
 ```
 
-TLS listeners serve HTTP/1.1 over TLS and negotiate ALPN `http/1.1` only. They do not advertise `h2`.
+Local example certs:
+
+```bash
+TRUST_STORES=system,nss mkcert -install
+mkcert \
+  -cert-file examples/shared/localhost.local.crt \
+  -key-file examples/shared/localhost.local.key \
+  localhost 127.0.0.1 ::1
+
+./build.sh -tls
+./bin/02_https
+```
+
+The TLS examples also accept:
+
+```bash
+SYPHAX_WEB_TLS_CERT=/path/to/fullchain.pem \
+SYPHAX_WEB_TLS_KEY=/path/to/privkey.pem \
+./bin/02_https
+```
 
 ## Static Files
 
-Use the docroot-scoped helper for public assets:
+Serve public assets from a fixed docroot:
 
 ```c
 if (sw_http_is(hm, "GET", "/style.css")) {
@@ -122,31 +118,11 @@ if (sw_http_is(hm, "GET", "/style.css")) {
 }
 ```
 
-Request-driven assets should go through `sw_http_serve_path`; it rejects traversal outside the docroot.
-
-## Server Config
-
-Every manager starts with bounded request and timeout defaults:
-
-- `max_header_bytes = 16 KiB`
-- `max_body_bytes = 1 MiB`
-- `max_header_count = 64`
-- `header_timeout_ms = 5000`
-- `body_timeout_ms = 15000`
-- `idle_timeout_ms = 15000`
-
-Override them by passing a `sw_http_config` to `sw_mgr_create` or `sw_server_listen`. Pass `NULL` to use the defaults as-is.
-
-## Common Pieces
-
-- HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
-- JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
-- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
-- Utility: `sw_matches_query`
+`sw_http_serve_path` keeps requests inside the docroot.
 
 ## Translations
 
-Source-grouped file:
+One JSON object per source string:
 
 ```json
 {
@@ -161,8 +137,6 @@ Source-grouped file:
 }
 ```
 
-Load:
-
 ```c
 #include "sw_translator.h"
 
@@ -171,56 +145,38 @@ sw_translator* tr = sw_translator_create("resources/translations.json",
     .label = "English",
     .direction = SW_LANGUAGE_DIRECTION_LTR
 );
+
 sw_translator_add(tr, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
 sw_translator_add(tr, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
 sw_translator_set_language(tr, "ja");
 ```
 
-One file, one object per source string. English stays the source-text fallback, so no separate `en.json` is needed.
+English source text is the fallback. The installed file is `share/syphax_web/translations.json`.
 
-Installed translations file:
+## Common API
 
-- `share/syphax_web/translations.json`
+- HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
+- HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
+- JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
+- Utility: `sw_matches_query`
 
 ## Examples
 
-All examples use the shared stylesheet in `examples/shared/style.css`.
+Build outputs:
 
-- `bin/01_http`: HTTP-only minimal server on `http://127.0.0.1:8000`
+- `bin/01_http`: HTTP app on `http://127.0.0.1:8000`
 - `bin/02_https`: HTTPS status page on `https://127.0.0.1:8443`
-- `bin/03_static_site`: HTTPS static site with HTML, JSON, text, and CSS routes on `https://127.0.0.1:8444`
-- `bin/04_live_queue`: HTTPS live queue using query/form helpers and inline JS helpers on `https://127.0.0.1:8445`
-- `bin/05_folder_app`: HTTPS folder app served from `examples/advanced` on `https://127.0.0.1:8446`
+- `bin/03_static_site`: static HTTPS site on `https://127.0.0.1:8444`
+- `bin/04_live_queue`: live form demo on `https://127.0.0.1:8445`
+- `bin/05_folder_app`: folder-backed app on `https://127.0.0.1:8446`
 
-The TLS examples require a certificate and private key. Do not commit private keys to the repo. For local HTTPS, generate a localhost certificate with a local CA such as `mkcert`:
+## Fit
 
-```bash
-TRUST_STORES=system,nss mkcert -install
-mkcert \
-  -cert-file examples/shared/localhost.local.crt \
-  -key-file examples/shared/localhost.local.key \
-  localhost 127.0.0.1 ::1
+Use Syphax-Web for embedded tools, local dashboards, internal services, and small server-rendered apps.
 
-./build.sh -tls
-./bin/02_https
-```
+Use a front proxy for HTTP/2, compression, rate limits, and edge policy.
 
-The examples automatically use `examples/shared/localhost.local.crt` and `examples/shared/localhost.local.key` when they exist. Those files are ignored by git. You can also point at a real certificate explicitly:
-
-If the browser still shows a warning after `mkcert -install`, restart the browser and open `https://127.0.0.1:8443` again. Firefox may need NSS trust-store installation, which is why the command above sets `TRUST_STORES=system,nss`.
-
-```bash
-SYPHAX_WEB_TLS_CERT=/path/to/fullchain.pem \
-SYPHAX_WEB_TLS_KEY=/path/to/privkey.pem \
-./bin/02_https
-```
-
-## Scope
-
-- request size and timeout config defaults are enforced, but this is still a small HTTP/1.1 server layer rather than a full edge proxy
-- native TLS is available only when built with OpenSSL
-- HTTP/2 is not implemented natively; use nginx, Caddy, HAProxy, or another edge proxy to terminate HTTP/2 and forward HTTP/1.1 to `sw_http_listen`
-- no chunked request decoding
+TLS listeners speak HTTP/1.1. Request bodies are bounded. Chunked request bodies are a future add.
 
 ## License
 
