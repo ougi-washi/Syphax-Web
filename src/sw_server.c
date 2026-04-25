@@ -1670,6 +1670,10 @@ static void sw_mgr_enforce_timeouts(sw_mgr* mgr) {
             if (sw_http_reply_status_text(connection, 408, "Request Timeout") != 0) {
                 continue;
             }
+            if (sw_connection_has_pending_output(connection)
+                && sw_mgr_connection_writable(mgr, connection) < 0) {
+                continue;
+            }
         }
         ++i;
     }
