@@ -21,6 +21,10 @@
 #    include <openssl/ssl.h>
 #endif
 
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+#    include <openssl/evp.h>
+#endif
+
 typedef enum {
     SW_PARSE_PENDING = 0,
     SW_PARSE_READY = 1,
@@ -63,6 +67,33 @@ struct sw_sessions {
     i32 ttl_seconds;
     sz max_sessions;
     sz max_items;
+};
+
+typedef struct {
+    c8* key;
+    c8* value;
+} sw_token_item;
+
+typedef s_array(sw_token_item, sw_token_item_array);
+
+struct sw_token {
+    c8 id[65];
+    sw_token_item_array items;
+    f64 expires_at_ms;
+    f64 touched_at_ms;
+    sz max_items;
+};
+
+typedef s_array(sw_token, sw_token_array);
+
+struct sw_tokens {
+    sw_token_array tokens;
+    c8* cookie_name;
+    sw_http_cookie cookie;
+    i32 ttl_seconds;
+    sz max_tokens;
+    sz max_items;
+    u8 secret[32];
 };
 
 static sz sw_socket_runtime_users = 0;
@@ -115,6 +146,10 @@ static c8* sw_strdup_trimmed_range(const c8* text, sz text_len);
 static i32 sw_random_bytes(u8* out, sz out_len);
 static void sw_session_free(sw_session* session);
 static void sw_sessions_remove_at(sw_sessions* sessions, sz index);
+static void sw_token_free(sw_token* token);
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+static void sw_tokens_remove_at(sw_tokens* tokens, sz index);
+#endif
 
 #if defined(SYPHAX_WEB_HAS_TLS)
 static SSL_CTX* sw_tls_context_create(const sw_tls_config* config);
@@ -123,6 +158,13 @@ static int sw_connection_tls_handshake(sw_mgr* mgr, sw_connection* connection);
 static b8 sw_connection_tls_handshake_pending(const sw_connection* connection);
 static int sw_connection_transport_recv(sw_connection* connection, c8* data, sz data_cap, int* out_read);
 static int sw_connection_transport_send(sw_connection* connection, const c8* data, sz data_len, int* out_sent);
+#endif
+
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+static c8* sw_base64url_encode(const u8* data, sz data_len);
+static u8* sw_base64url_decode(const c8* text, sz text_len, sz* out_len);
+static b8 sw_token_encrypt_cookie_value(const sw_tokens* tokens, const c8 id[65], c8** out_value);
+static b8 sw_token_decrypt_cookie_value(const sw_tokens* tokens, const c8* value, c8 out_id[65]);
 #endif
 
 #ifdef _WIN32
@@ -3181,6 +3223,219 @@ static b8 sw_session_generate_id(c8 out[65]) {
     return 1;
 }
 
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+static c8* sw_base64url_encode(const u8* data, sz data_len) {
+    c8* encoded;
+    int encoded_len;
+    sz i;
+
+    if (data == NULL || data_len > (sz)INT_MAX) {
+        return NULL;
+    }
+
+    encoded_len = 4 * (int)((data_len + 2) / 3);
+    encoded = (c8*)calloc((sz)encoded_len + 1, 1);
+    if (encoded == NULL) {
+        return NULL;
+    }
+    if (EVP_EncodeBlock((unsigned char*)encoded, data, (int)data_len) != encoded_len) {
+        free(encoded);
+        return NULL;
+    }
+
+    for (i = 0; i < (sz)encoded_len; ++i) {
+        if (encoded[i] == '+') {
+            encoded[i] = '-';
+        } else if (encoded[i] == '/') {
+            encoded[i] = '_';
+        }
+    }
+    while (encoded_len > 0 && encoded[encoded_len - 1] == '=') {
+        encoded[--encoded_len] = '\0';
+    }
+    return encoded;
+}
+
+static u8* sw_base64url_decode(const c8* text, sz text_len, sz* out_len) {
+    const sz mod = text_len % 4;
+    const sz pad = (mod == 0) ? 0 : 4 - mod;
+    const sz padded_len = text_len + pad;
+    c8* base64;
+    u8* decoded;
+    int decoded_len;
+    sz i;
+
+    if (out_len != NULL) {
+        *out_len = 0;
+    }
+    if (text == NULL || out_len == NULL || mod == 1 || padded_len > (sz)INT_MAX) {
+        return NULL;
+    }
+
+    base64 = (c8*)calloc(padded_len + 1, 1);
+    decoded = (u8*)calloc((padded_len / 4) * 3 + 1, 1);
+    if (base64 == NULL || decoded == NULL) {
+        free(base64);
+        free(decoded);
+        return NULL;
+    }
+
+    for (i = 0; i < text_len; ++i) {
+        const c8 ch = text[i];
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+            base64[i] = ch;
+        } else if (ch == '-') {
+            base64[i] = '+';
+        } else if (ch == '_') {
+            base64[i] = '/';
+        } else {
+            free(base64);
+            free(decoded);
+            return NULL;
+        }
+    }
+    for (i = 0; i < pad; ++i) {
+        base64[text_len + i] = '=';
+    }
+
+    decoded_len = EVP_DecodeBlock(decoded, (const unsigned char*)base64, (int)padded_len);
+    free(base64);
+    if (decoded_len < 0 || (sz)decoded_len < pad) {
+        free(decoded);
+        return NULL;
+    }
+
+    *out_len = (sz)decoded_len - pad;
+    return decoded;
+}
+
+static b8 sw_token_encrypt_cookie_value(const sw_tokens* tokens, const c8 id[65], c8** out_value) {
+    enum { SW_TOKEN_NONCE_LEN = 12, SW_TOKEN_TAG_LEN = 16, SW_TOKEN_ID_LEN = 64 };
+    EVP_CIPHER_CTX* ctx = NULL;
+    u8 nonce[SW_TOKEN_NONCE_LEN];
+    u8 ciphertext[SW_TOKEN_ID_LEN];
+    u8 tag[SW_TOKEN_TAG_LEN];
+    u8 combined[SW_TOKEN_NONCE_LEN + SW_TOKEN_ID_LEN + SW_TOKEN_TAG_LEN];
+    c8* encoded = NULL;
+    c8* value = NULL;
+    int len = 0;
+    int ciphertext_len = 0;
+    b8 ok = 0;
+
+    if (out_value != NULL) {
+        *out_value = NULL;
+    }
+    if (tokens == NULL || id == NULL || out_value == NULL || !sw_session_id_is_valid(id)) {
+        return 0;
+    }
+    if (OPENSSL_init_crypto(0, NULL) != 1 || sw_random_bytes(nonce, sizeof(nonce)) != 0) {
+        return 0;
+    }
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        return 0;
+    }
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1
+        || EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)sizeof(nonce), NULL) != 1
+        || EVP_EncryptInit_ex(ctx, NULL, NULL, tokens->secret, nonce) != 1
+        || EVP_EncryptUpdate(ctx, ciphertext, &len, (const unsigned char*)id, SW_TOKEN_ID_LEN) != 1) {
+        goto done;
+    }
+    ciphertext_len = len;
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + ciphertext_len, &len) != 1) {
+        goto done;
+    }
+    ciphertext_len += len;
+    if (ciphertext_len != SW_TOKEN_ID_LEN
+        || EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, (int)sizeof(tag), tag) != 1) {
+        goto done;
+    }
+
+    memcpy(combined, nonce, sizeof(nonce));
+    memcpy(combined + sizeof(nonce), ciphertext, sizeof(ciphertext));
+    memcpy(combined + sizeof(nonce) + sizeof(ciphertext), tag, sizeof(tag));
+    encoded = sw_base64url_encode(combined, sizeof(combined));
+    if (encoded == NULL) {
+        goto done;
+    }
+
+    value = (c8*)calloc(strlen(encoded) + 4, 1);
+    if (value == NULL) {
+        goto done;
+    }
+    memcpy(value, "v1.", 3);
+    strcpy(value + 3, encoded);
+    *out_value = value;
+    value = NULL;
+    ok = 1;
+
+done:
+    EVP_CIPHER_CTX_free(ctx);
+    free(encoded);
+    free(value);
+    return ok;
+}
+
+static b8 sw_token_decrypt_cookie_value(const sw_tokens* tokens, const c8* value, c8 out_id[65]) {
+    enum { SW_TOKEN_NONCE_LEN = 12, SW_TOKEN_TAG_LEN = 16, SW_TOKEN_ID_LEN = 64 };
+    EVP_CIPHER_CTX* ctx = NULL;
+    u8* decoded = NULL;
+    sz decoded_len = 0;
+    const u8* nonce;
+    const u8* ciphertext;
+    const u8* tag;
+    u8 plaintext[SW_TOKEN_ID_LEN + 1];
+    int len = 0;
+    int plaintext_len = 0;
+    b8 ok = 0;
+
+    if (out_id != NULL) {
+        out_id[0] = '\0';
+    }
+    if (tokens == NULL || value == NULL || out_id == NULL || strncmp(value, "v1.", 3) != 0) {
+        return 0;
+    }
+
+    decoded = sw_base64url_decode(value + 3, strlen(value + 3), &decoded_len);
+    if (decoded == NULL || decoded_len != SW_TOKEN_NONCE_LEN + SW_TOKEN_ID_LEN + SW_TOKEN_TAG_LEN) {
+        goto done;
+    }
+
+    nonce = decoded;
+    ciphertext = decoded + SW_TOKEN_NONCE_LEN;
+    tag = decoded + SW_TOKEN_NONCE_LEN + SW_TOKEN_ID_LEN;
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        goto done;
+    }
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1
+        || EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SW_TOKEN_NONCE_LEN, NULL) != 1
+        || EVP_DecryptInit_ex(ctx, NULL, NULL, tokens->secret, nonce) != 1
+        || EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, SW_TOKEN_ID_LEN) != 1) {
+        goto done;
+    }
+    plaintext_len = len;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, SW_TOKEN_TAG_LEN, (void*)tag) != 1
+        || EVP_DecryptFinal_ex(ctx, plaintext + plaintext_len, &len) != 1) {
+        goto done;
+    }
+    plaintext_len += len;
+    if (plaintext_len != SW_TOKEN_ID_LEN) {
+        goto done;
+    }
+    plaintext[SW_TOKEN_ID_LEN] = '\0';
+    memcpy(out_id, plaintext, SW_TOKEN_ID_LEN + 1);
+    ok = sw_session_id_is_valid(out_id);
+
+done:
+    EVP_CIPHER_CTX_free(ctx);
+    free(decoded);
+    return ok;
+}
+#endif
+
 static void sw_session_free(sw_session* session) {
     sz i;
 
@@ -3528,6 +3783,424 @@ i32 sw_session_remove(sw_session* session, const c8* key) {
             free(item->key);
             free(item->value);
             s_array_remove_ordered(&session->items, handle);
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void sw_token_free(sw_token* token) {
+    sz i;
+
+    if (token == NULL) {
+        return;
+    }
+    for (i = 0; i < s_array_get_size(&token->items); ++i) {
+        sw_token_item* item = &s_array_get_data(&token->items)[i];
+        free(item->key);
+        free(item->value);
+    }
+    s_array_clear(&token->items);
+    memset(token, 0, sizeof(*token));
+}
+
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+static void sw_tokens_remove_at(sw_tokens* tokens, sz index) {
+    sw_token* token;
+    s_handle handle;
+
+    if (tokens == NULL || index >= s_array_get_size(&tokens->tokens)) {
+        return;
+    }
+    handle = s_array_handle(&tokens->tokens, (u32)index);
+    token = s_array_get(&tokens->tokens, handle);
+    sw_token_free(token);
+    s_array_remove_ordered(&tokens->tokens, handle);
+}
+
+static void sw_tokens_cleanup_expired(sw_tokens* tokens, f64 now_ms) {
+    sz i = 0;
+
+    if (tokens == NULL) {
+        return;
+    }
+    while (i < s_array_get_size(&tokens->tokens)) {
+        sw_token* token = &s_array_get_data(&tokens->tokens)[i];
+        if (token->expires_at_ms <= now_ms) {
+            sw_tokens_remove_at(tokens, i);
+            continue;
+        }
+        ++i;
+    }
+}
+
+static sw_token* sw_tokens_find_id(sw_tokens* tokens, const c8* id, f64 now_ms) {
+    sz i;
+
+    if (tokens == NULL || !sw_session_id_is_valid(id)) {
+        return NULL;
+    }
+    sw_tokens_cleanup_expired(tokens, now_ms);
+    for (i = 0; i < s_array_get_size(&tokens->tokens); ++i) {
+        sw_token* token = &s_array_get_data(&tokens->tokens)[i];
+        if (strcmp(token->id, id) == 0) {
+            return token;
+        }
+    }
+    return NULL;
+}
+
+static void sw_tokens_evict_oldest(sw_tokens* tokens) {
+    sz oldest_index = 0;
+    sz i;
+    f64 oldest_touched;
+
+    if (tokens == NULL || s_array_get_size(&tokens->tokens) == 0) {
+        return;
+    }
+
+    oldest_touched = s_array_get_data(&tokens->tokens)[0].touched_at_ms;
+    for (i = 1; i < s_array_get_size(&tokens->tokens); ++i) {
+        sw_token* token = &s_array_get_data(&tokens->tokens)[i];
+        if (token->touched_at_ms < oldest_touched) {
+            oldest_touched = token->touched_at_ms;
+            oldest_index = i;
+        }
+    }
+    sw_tokens_remove_at(tokens, oldest_index);
+}
+
+static i32 sw_tokens_cookie_id(sw_tokens* tokens, const sw_http_message* hm, c8 out_id[65]) {
+    c8 cookie_value[512];
+    const i32 cookie_len = (tokens != NULL && hm != NULL)
+        ? sw_http_get_cookie(hm, tokens->cookie_name, cookie_value, sizeof(cookie_value))
+        : -1;
+
+    if (out_id != NULL) {
+        out_id[0] = '\0';
+    }
+    if (tokens == NULL || hm == NULL || out_id == NULL) {
+        return -1;
+    }
+    if (cookie_len <= 0) {
+        return 0;
+    }
+    return sw_token_decrypt_cookie_value(tokens, cookie_value, out_id) ? 1 : -1;
+}
+
+static void sw_tokens_clear_cookie_if_possible(sw_tokens* tokens, sw_connection* connection) {
+    if (tokens != NULL && connection != NULL) {
+        (void)sw_http_clear_cookie(connection, tokens->cookie_name, &tokens->cookie);
+    }
+}
+#endif
+
+sw_token_config sw_token_config_default(void) {
+    sw_token_config config;
+
+    memset(&config, 0, sizeof(config));
+    config.cookie_name = "sw_token";
+    config.secret = NULL;
+    config.secret_len = 0;
+    config.ttl_seconds = 3600;
+    config.max_tokens = 1024;
+    config.max_items = 32;
+    config.cookie = sw_http_cookie_default();
+    config.cookie.max_age = -1;
+    return config;
+}
+
+sw_tokens* sw_tokens_create(const sw_token_config* config) {
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+    sw_token_config effective = sw_token_config_default();
+    sw_tokens* tokens;
+    b8 explicit_cookie = 0;
+
+    if (config != NULL) {
+        if (config->cookie_name != NULL) {
+            effective.cookie_name = config->cookie_name;
+        }
+        if (config->secret != NULL) {
+            effective.secret = config->secret;
+            effective.secret_len = config->secret_len;
+        }
+        if (config->ttl_seconds > 0) {
+            effective.ttl_seconds = config->ttl_seconds;
+        }
+        if (config->max_tokens > 0) {
+            effective.max_tokens = config->max_tokens;
+        }
+        if (config->max_items > 0) {
+            effective.max_items = config->max_items;
+        }
+        if (sw_session_cookie_has_values(&config->cookie)) {
+            effective.cookie = config->cookie;
+            explicit_cookie = 1;
+        }
+    }
+    if (effective.secret != NULL && effective.secret_len != 32) {
+        return NULL;
+    }
+    if (!explicit_cookie || effective.cookie.max_age <= 0) {
+        effective.cookie.max_age = effective.ttl_seconds;
+    }
+
+    tokens = (sw_tokens*)calloc(1, sizeof(*tokens));
+    if (tokens == NULL) {
+        return NULL;
+    }
+    tokens->cookie_name = sw_strdup_cstr(effective.cookie_name);
+    tokens->ttl_seconds = effective.ttl_seconds;
+    tokens->max_tokens = effective.max_tokens;
+    tokens->max_items = effective.max_items;
+    s_array_init(&tokens->tokens);
+    if (tokens->cookie_name == NULL || !sw_sessions_copy_cookie(&tokens->cookie, &effective.cookie)) {
+        sw_tokens_destroy(tokens);
+        return NULL;
+    }
+    if (effective.secret != NULL) {
+        memcpy(tokens->secret, effective.secret, sizeof(tokens->secret));
+    } else if (sw_random_bytes(tokens->secret, sizeof(tokens->secret)) != 0) {
+        sw_tokens_destroy(tokens);
+        return NULL;
+    }
+    return tokens;
+#else
+    (void)config;
+    return NULL;
+#endif
+}
+
+void sw_tokens_destroy(sw_tokens* tokens) {
+    sz i;
+
+    if (tokens == NULL) {
+        return;
+    }
+    for (i = 0; i < s_array_get_size(&tokens->tokens); ++i) {
+        sw_token_free(&s_array_get_data(&tokens->tokens)[i]);
+    }
+    s_array_clear(&tokens->tokens);
+    free(tokens->cookie_name);
+    sw_sessions_free_cookie(&tokens->cookie);
+    memset(tokens->secret, 0, sizeof(tokens->secret));
+    free(tokens);
+}
+
+sw_token* sw_tokens_login(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm, const c8* user_id) {
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+    const f64 now_ms = sw_now_ms();
+    sw_token new_token;
+    sw_token* token = NULL;
+    s_handle handle;
+    c8 current_id[65];
+    c8* cookie_value = NULL;
+    int attempt;
+
+    if (tokens == NULL || connection == NULL || hm == NULL) {
+        return NULL;
+    }
+
+    if (sw_tokens_cookie_id(tokens, hm, current_id) == 1) {
+        sz i;
+        for (i = 0; i < s_array_get_size(&tokens->tokens); ++i) {
+            sw_token* existing = &s_array_get_data(&tokens->tokens)[i];
+            if (strcmp(existing->id, current_id) == 0) {
+                sw_tokens_remove_at(tokens, i);
+                break;
+            }
+        }
+    }
+
+    sw_tokens_cleanup_expired(tokens, now_ms);
+    while (s_array_get_size(&tokens->tokens) >= tokens->max_tokens && s_array_get_size(&tokens->tokens) > 0) {
+        sw_tokens_evict_oldest(tokens);
+    }
+
+    memset(&new_token, 0, sizeof(new_token));
+    s_array_init(&new_token.items);
+    new_token.expires_at_ms = now_ms + (f64)tokens->ttl_seconds * 1000.0;
+    new_token.touched_at_ms = now_ms;
+    new_token.max_items = tokens->max_items;
+
+    for (attempt = 0; attempt < 16; ++attempt) {
+        if (!sw_session_generate_id(new_token.id)) {
+            sw_token_free(&new_token);
+            return NULL;
+        }
+        if (sw_tokens_find_id(tokens, new_token.id, now_ms) == NULL) {
+            break;
+        }
+    }
+    if (attempt == 16) {
+        sw_token_free(&new_token);
+        return NULL;
+    }
+
+    handle = s_array_add(&tokens->tokens, new_token);
+    token = s_array_get(&tokens->tokens, handle);
+    if (token == NULL) {
+        return NULL;
+    }
+    if (user_id != NULL && sw_token_set(token, "user_id", user_id) != 0) {
+        sw_token_free(token);
+        s_array_remove_ordered(&tokens->tokens, handle);
+        return NULL;
+    }
+    if (!sw_token_encrypt_cookie_value(tokens, token->id, &cookie_value)
+        || sw_http_set_cookie(connection, tokens->cookie_name, cookie_value, &tokens->cookie) != 0) {
+        free(cookie_value);
+        sw_token_free(token);
+        s_array_remove_ordered(&tokens->tokens, handle);
+        return NULL;
+    }
+    free(cookie_value);
+    return token;
+#else
+    (void)tokens;
+    (void)connection;
+    (void)hm;
+    (void)user_id;
+    return NULL;
+#endif
+}
+
+sw_token* sw_tokens_current(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm) {
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+    const f64 now_ms = sw_now_ms();
+    c8 id[65];
+    c8* cookie_value = NULL;
+    sw_token* token;
+    const i32 cookie_status = sw_tokens_cookie_id(tokens, hm, id);
+
+    if (tokens == NULL || hm == NULL) {
+        return NULL;
+    }
+    if (cookie_status == 0) {
+        sw_tokens_cleanup_expired(tokens, now_ms);
+        return NULL;
+    }
+    if (cookie_status < 0) {
+        sw_tokens_clear_cookie_if_possible(tokens, connection);
+        return NULL;
+    }
+
+    token = sw_tokens_find_id(tokens, id, now_ms);
+    if (token == NULL) {
+        sw_tokens_clear_cookie_if_possible(tokens, connection);
+        return NULL;
+    }
+    token->touched_at_ms = now_ms;
+    token->expires_at_ms = now_ms + (f64)tokens->ttl_seconds * 1000.0;
+    if (connection != NULL) {
+        if (!sw_token_encrypt_cookie_value(tokens, token->id, &cookie_value)
+            || sw_http_set_cookie(connection, tokens->cookie_name, cookie_value, &tokens->cookie) != 0) {
+            free(cookie_value);
+            return NULL;
+        }
+        free(cookie_value);
+    }
+    return token;
+#else
+    (void)tokens;
+    (void)connection;
+    (void)hm;
+    return NULL;
+#endif
+}
+
+i32 sw_tokens_logout(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm) {
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+    c8 id[65];
+    const i32 cookie_status = sw_tokens_cookie_id(tokens, hm, id);
+    sz i;
+
+    if (tokens == NULL || connection == NULL) {
+        return -1;
+    }
+    if (cookie_status == 1) {
+        for (i = 0; i < s_array_get_size(&tokens->tokens); ++i) {
+            sw_token* token = &s_array_get_data(&tokens->tokens)[i];
+            if (strcmp(token->id, id) == 0) {
+                sw_tokens_remove_at(tokens, i);
+                break;
+            }
+        }
+    }
+    return sw_http_clear_cookie(connection, tokens->cookie_name, &tokens->cookie);
+#else
+    (void)tokens;
+    (void)connection;
+    (void)hm;
+    return -1;
+#endif
+}
+
+const c8* sw_token_id(const sw_token* token) {
+    return (token != NULL) ? token->id : "";
+}
+
+const c8* sw_token_get(const sw_token* token, const c8* key) {
+    sz i;
+
+    if (token == NULL || key == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < s_array_get_size(&token->items); ++i) {
+        const sw_token_item* item = &s_array_get_data((sw_token_item_array*)&token->items)[i];
+        if (item->key != NULL && strcmp(item->key, key) == 0) {
+            return item->value;
+        }
+    }
+    return NULL;
+}
+
+i32 sw_token_set(sw_token* token, const c8* key, const c8* value) {
+    sz i;
+    sw_token_item item;
+
+    if (token == NULL || key == NULL || *key == '\0' || value == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s_array_get_size(&token->items); ++i) {
+        sw_token_item* existing = &s_array_get_data(&token->items)[i];
+        if (existing->key != NULL && strcmp(existing->key, key) == 0) {
+            c8* copy = sw_strdup_cstr(value);
+            if (copy == NULL) {
+                return -1;
+            }
+            free(existing->value);
+            existing->value = copy;
+            return 0;
+        }
+    }
+    if (s_array_get_size(&token->items) >= token->max_items) {
+        return -1;
+    }
+    item.key = sw_strdup_cstr(key);
+    item.value = sw_strdup_cstr(value);
+    if (item.key == NULL || item.value == NULL) {
+        free(item.key);
+        free(item.value);
+        return -1;
+    }
+    s_array_add(&token->items, item);
+    return 0;
+}
+
+i32 sw_token_remove(sw_token* token, const c8* key) {
+    sz i;
+
+    if (token == NULL || key == NULL) {
+        return -1;
+    }
+    for (i = 0; i < s_array_get_size(&token->items); ++i) {
+        sw_token_item* item = &s_array_get_data(&token->items)[i];
+        if (item->key != NULL && strcmp(item->key, key) == 0) {
+            const s_handle handle = s_array_handle(&token->items, (u32)i);
+            free(item->key);
+            free(item->value);
+            s_array_remove_ordered(&token->items, handle);
             return 0;
         }
     }

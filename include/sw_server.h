@@ -12,6 +12,8 @@ typedef struct sw_mgr sw_mgr;
 typedef struct sw_connection sw_connection;
 typedef struct sw_sessions sw_sessions;
 typedef struct sw_session sw_session;
+typedef struct sw_tokens sw_tokens;
+typedef struct sw_token sw_token;
 
 typedef enum sw_cookie_same_site {
     SW_COOKIE_SAMESITE_UNSET,
@@ -43,6 +45,16 @@ typedef struct {
     sz max_items;
     sw_http_cookie cookie;
 } sw_session_config;
+
+typedef struct {
+    const c8* cookie_name;
+    const u8* secret;
+    sz secret_len;
+    i32 ttl_seconds;
+    sz max_tokens;
+    sz max_items;
+    sw_http_cookie cookie;
+} sw_token_config;
 
 typedef struct {
     const c8* method;
@@ -129,6 +141,17 @@ SW_API const c8* sw_session_id(const sw_session* session);
 SW_API const c8* sw_session_get(const sw_session* session, const c8* key);
 SW_API i32 sw_session_set(sw_session* session, const c8* key, const c8* value);
 SW_API i32 sw_session_remove(sw_session* session, const c8* key);
+
+SW_API sw_token_config sw_token_config_default(void);
+SW_API sw_tokens* sw_tokens_create(const sw_token_config* config);
+SW_API void sw_tokens_destroy(sw_tokens* tokens);
+SW_API sw_token* sw_tokens_login(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm, const c8* user_id);
+SW_API sw_token* sw_tokens_current(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm);
+SW_API i32 sw_tokens_logout(sw_tokens* tokens, sw_connection* connection, const sw_http_message* hm);
+SW_API const c8* sw_token_id(const sw_token* token);
+SW_API const c8* sw_token_get(const sw_token* token, const c8* key);
+SW_API i32 sw_token_set(sw_token* token, const c8* key, const c8* value);
+SW_API i32 sw_token_remove(sw_token* token, const c8* key);
 
 SW_API const c8* sw_connection_remote_ip(const sw_connection* connection);
 SW_API u16 sw_connection_remote_port(const sw_connection* connection);

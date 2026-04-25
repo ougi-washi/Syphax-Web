@@ -21,6 +21,12 @@ TLS build:
 ./build.sh -tls
 ```
 
+Encrypted login tokens:
+
+```bash
+./build.sh -crypto
+```
+
 Install:
 
 ```bash
@@ -85,6 +91,24 @@ sw_session_set(session, "user_id", "42");
 ```
 
 Default cookies use `Path=/`, `HttpOnly`, `SameSite=Lax`, and `Secure` on TLS connections.
+
+## Encrypted Login Tokens
+
+Build with `./build.sh -crypto` or `./build.sh -tls`.
+
+```c
+sw_tokens* tokens = sw_tokens_create(NULL);
+
+sw_token* token = sw_tokens_login(tokens, c, hm, user_id);
+sw_token_set(token, "role", "admin");
+
+token = sw_tokens_current(tokens, c, hm);
+const c8* user_id = sw_token_get(token, "user_id");
+
+sw_tokens_logout(tokens, c, hm);
+```
+
+Apps still check passwords and load users. Syphax-Web stores token data in memory and sends only an encrypted cookie.
 
 ## TLS
 
@@ -173,6 +197,7 @@ English source text is the fallback. The installed file is `share/syphax_web/tra
 - HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
 - HTTP: `sw_http_is`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_get_cookie`, `sw_http_set_cookie`, `sw_http_clear_cookie`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
 - Sessions: `sw_sessions_create`, `sw_sessions_start`, `sw_session_get`, `sw_session_set`, `sw_sessions_end`, `sw_sessions_destroy`
+- Tokens: `sw_tokens_create`, `sw_tokens_login`, `sw_tokens_current`, `sw_token_get`, `sw_token_set`, `sw_tokens_logout`
 - JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
 - Utility: `sw_matches_query`
 
@@ -185,6 +210,7 @@ Build outputs:
 - `bin/03_static_site`: static HTTPS site on `https://127.0.0.1:8444`
 - `bin/04_live_queue`: live form demo on `https://127.0.0.1:8445`
 - `bin/05_folder_app`: folder-backed app on `https://127.0.0.1:8446`
+- `bin/06_session_login`: session login demo on `http://127.0.0.1:8001`
 
 ## Fit
 

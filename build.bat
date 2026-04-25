@@ -7,6 +7,7 @@ set "build_type=Debug"
 set "build_dir="
 set "clean=0"
 set "tls=0"
+set "crypto=0"
 set "cmake_args="
 
 :parse_args
@@ -18,6 +19,10 @@ if /I "!arg!"=="-tls" set "tls=1" & shift & goto parse_args
 if /I "!arg!"=="--tls" set "tls=1" & shift & goto parse_args
 if /I "!arg!"=="-no-tls" set "tls=0" & shift & goto parse_args
 if /I "!arg!"=="--no-tls" set "tls=0" & shift & goto parse_args
+if /I "!arg!"=="-crypto" set "crypto=1" & shift & goto parse_args
+if /I "!arg!"=="--crypto" set "crypto=1" & shift & goto parse_args
+if /I "!arg!"=="-no-crypto" set "crypto=0" & shift & goto parse_args
+if /I "!arg!"=="--no-crypto" set "crypto=0" & shift & goto parse_args
 if /I "!arg!"=="-debug" set "build_type=Debug" & shift & goto parse_args
 if /I "!arg!"=="--debug" set "build_type=Debug" & shift & goto parse_args
 if /I "!arg!"=="-release" set "build_type=Release" & shift & goto parse_args
@@ -34,6 +39,12 @@ if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_TLS=TRUE" set "tls=1" & shift & goto parse_a
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_TLS=OFF" set "tls=0" & shift & goto parse_args
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_TLS=0" set "tls=0" & shift & goto parse_args
 if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_TLS=FALSE" set "tls=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=ON" set "crypto=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=1" set "crypto=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=TRUE" set "crypto=1" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=OFF" set "crypto=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=0" set "crypto=0" & shift & goto parse_args
+if /I "!arg!"=="-DSYPHAX_WEB_ENABLE_CRYPTO=FALSE" set "crypto=0" & shift & goto parse_args
 if "!arg:~0,2!"=="-D" set "cmake_args=!cmake_args! !arg!" & shift & goto parse_args
 echo error: unknown option: !arg!
 echo Run build.bat --help for usage.
@@ -54,11 +65,17 @@ shift
 goto parse_args
 
 :args_done
+if "%tls%"=="1" set "crypto=1"
+
 if "%build_dir%"=="" (
   if "%tls%"=="1" (
     set "build_dir=build-tls"
   ) else (
-    set "build_dir=build"
+    if "%crypto%"=="1" (
+      set "build_dir=build-crypto"
+    ) else (
+      set "build_dir=build"
+    )
   )
 )
 
@@ -66,6 +83,11 @@ if "%tls%"=="1" (
   set "tls_value=ON"
 ) else (
   set "tls_value=OFF"
+)
+if "%crypto%"=="1" (
+  set "crypto_value=ON"
+) else (
+  set "crypto_value=OFF"
 )
 
 if not exist "lib\syphax\s_array.h" (
@@ -79,7 +101,7 @@ if "%clean%"=="1" (
 
 if not exist bin mkdir bin
 set "bin_marker=bin\.syphax_web_active_build"
-set "bin_config=build_dir=%build_dir%;build_type=%build_type%;tls=%tls_value%;cmake_args=%cmake_args%"
+set "bin_config=build_dir=%build_dir%;build_type=%build_type%;tls=%tls_value%;crypto=%crypto_value%;cmake_args=%cmake_args%"
 set "previous_bin_config="
 if exist "%bin_marker%" set /p previous_bin_config=<"%bin_marker%"
 
@@ -88,17 +110,18 @@ if not "%previous_bin_config%"=="%bin_config%" goto refresh_bin
 goto configure
 
 :refresh_bin
-echo Refreshing shared bin outputs for %build_dir% (%build_type%, TLS=%tls_value%)
-del /q "bin\01_http.exe" "bin\02_https.exe" "bin\03_static_site.exe" "bin\04_live_queue.exe" "bin\05_folder_app.exe" "bin\syphax_web_tests.exe" >nul 2>nul
+echo Refreshing shared bin outputs for %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%)
+del /q "bin\01_http.exe" "bin\02_https.exe" "bin\03_static_site.exe" "bin\04_live_queue.exe" "bin\05_folder_app.exe" "bin\06_session_login.exe" "bin\syphax_web_tests.exe" >nul 2>nul
 
 :configure
-echo Configuring %build_dir% (%build_type%, TLS=%tls_value%)
+echo Configuring %build_dir% (%build_type%, TLS=%tls_value%, CRYPTO=%crypto_value%)
 cmake -S . -B "%build_dir%" ^
   -DCMAKE_BUILD_TYPE="%build_type%" ^
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ^
   -DSYPHAX_WEB_BUILD_EXAMPLES=ON ^
   -DSYPHAX_WEB_BUILD_TESTS=ON ^
   -DSYPHAX_WEB_ENABLE_TLS="%tls_value%" ^
+  -DSYPHAX_WEB_ENABLE_CRYPTO="%crypto_value%" ^
   %cmake_args%
 if errorlevel 1 exit /b 1
 
@@ -115,6 +138,9 @@ echo.
 echo Options:
 echo   -tls, --tls          Build with OpenSSL TLS support. Uses build-tls by default.
 echo   -no-tls, --no-tls    Build without TLS. Uses build by default.
+echo   -crypto, --crypto    Build with OpenSSL encrypted token support. Uses build-crypto by default.
+echo   -no-crypto, --no-crypto
+echo                         Build without encrypted token support unless TLS is enabled.
 echo   -debug, --debug      Build Debug. This is the default.
 echo   -release, --release  Build Release.
 echo   -b, --build-dir DIR  Use a custom build directory.

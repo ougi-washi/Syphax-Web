@@ -42,6 +42,7 @@ typedef struct {
     const c8* docroot;
     const c8* file_name;
     sw_sessions* sessions;
+    sw_tokens* tokens;
     int request_count;
 } sw_test_server_state;
 
@@ -330,6 +331,75 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
         assert(state->sessions != NULL);
         assert(sw_sessions_end(state->sessions, connection, request) == 0);
         sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "ended");
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/token-login")) {
+        sw_token* token;
+
+        assert(state->tokens != NULL);
+        token = sw_tokens_login(state->tokens, connection, request, "user-1");
+        assert(token != NULL);
+        assert(sw_token_set(token, "role", "admin") == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+            "login id=%s user_id=%s role=%s",
+            sw_token_id(token),
+            sw_token_get(token, "user_id"),
+            sw_token_get(token, "role"));
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/token-items")) {
+        sw_token* token;
+        const i32 first = 0;
+        const i32 second = 0;
+        i32 third;
+        i32 removed;
+        i32 third_after_remove;
+
+        assert(state->tokens != NULL);
+        token = sw_tokens_login(state->tokens, connection, request, NULL);
+        assert(token != NULL);
+        assert(sw_token_set(token, "first", "1") == first);
+        assert(sw_token_set(token, "second", "2") == second);
+        third = sw_token_set(token, "third", "3");
+        removed = sw_token_remove(token, "first");
+        third_after_remove = sw_token_set(token, "third", "3");
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+            "first=%d second=%d third=%d removed=%d third_after_remove=%d",
+            first,
+            second,
+            third,
+            removed,
+            third_after_remove);
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/token-current")) {
+        sw_token* token;
+        const c8* user_id;
+        const c8* role;
+
+        assert(state->tokens != NULL);
+        token = sw_tokens_current(state->tokens, connection, request);
+        if (token == NULL) {
+            sw_http_replyf(connection, 401, "text/plain; charset=utf-8", "no token");
+            return;
+        }
+        user_id = sw_token_get(token, "user_id");
+        role = sw_token_get(token, "role");
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8",
+            "current id=%s user_id=%s role=%s",
+            sw_token_id(token),
+            user_id != NULL ? user_id : "",
+            role != NULL ? role : "");
+        return;
+    }
+
+    if (sw_http_is(request, "GET", "/token-logout")) {
+        assert(state->tokens != NULL);
+        assert(sw_tokens_logout(state->tokens, connection, request) == 0);
+        sw_http_replyf(connection, 200, "text/plain; charset=utf-8", "logout");
         return;
     }
 
@@ -948,6 +1018,7 @@ static void test_public_short_names(void) {
         "examples/03_static_site.c",
         "examples/04_live_queue.c",
         "examples/05_folder_app.c",
+        "examples/06_session_login.c",
         "tests/test_suite.c",
         "README.md"
     };
@@ -1181,6 +1252,82 @@ static void response_cookie_value(const sw_test_response* response, const char* 
 
     assert(!"missing Set-Cookie header");
 }
+
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+static void response_body_field(const sw_test_response* response, const char* name, char* out, sz out_len) {
+    const char* body;
+    const char* begin;
+    const char* end;
+    sz value_len;
+
+    assert(response != NULL);
+    assert(name != NULL);
+    assert(out != NULL);
+    assert(out_len > 0);
+    out[0] = '\0';
+
+    body = strstr(response->data, "\r\n\r\n");
+    assert(body != NULL);
+    body += 4;
+    begin = strstr(body, name);
+    assert(begin != NULL);
+    begin += strlen(name);
+    end = begin;
+    while (*end != '\0' && *end != ' ' && *end != '\r' && *end != '\n') {
+        ++end;
+    }
+    value_len = (sz)(end - begin);
+    assert(value_len + 1 < out_len);
+    memcpy(out, begin, value_len);
+    out[value_len] = '\0';
+}
+
+static void tamper_cookie_value(const char* in, char* out, sz out_len) {
+    sz len;
+    sz i;
+
+    assert(in != NULL);
+    assert(out != NULL);
+    assert(out_len > strlen(in));
+    strcpy(out, in);
+    len = strlen(out);
+    for (i = 3; i < len; ++i) {
+        if (out[i] >= 'A' && out[i] <= 'Y') {
+            out[i] = (c8)(out[i] + 1);
+            return;
+        }
+        if (out[i] == 'Z') {
+            out[i] = 'A';
+            return;
+        }
+        if (out[i] >= 'a' && out[i] <= 'y') {
+            out[i] = (c8)(out[i] + 1);
+            return;
+        }
+        if (out[i] == 'z') {
+            out[i] = 'a';
+            return;
+        }
+        if (out[i] >= '0' && out[i] <= '8') {
+            out[i] = (c8)(out[i] + 1);
+            return;
+        }
+        if (out[i] == '9') {
+            out[i] = '0';
+            return;
+        }
+        if (out[i] == '-') {
+            out[i] = '_';
+            return;
+        }
+        if (out[i] == '_') {
+            out[i] = '-';
+            return;
+        }
+    }
+    assert(!"cookie value did not contain a mutable payload character");
+}
+#endif
 
 #if defined(SYPHAX_WEB_HAS_TLS)
 static b8 sw_test_ssl_wants_retry(SSL* ssl, int rc) {
@@ -1530,6 +1677,308 @@ static void test_session_helpers(void) {
     sw_sessions_destroy(state.sessions);
 }
 
+static void test_token_helpers(void) {
+#if defined(SYPHAX_WEB_HAS_CRYPTO)
+    static const u8 secret[32] = {
+        0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87,
+        0x98, 0xa9, 0xba, 0xcb, 0xdc, 0xed, 0xfe, 0x0f,
+        0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87,
+        0x78, 0x69, 0x5a, 0x4b, 0x3c, 0x2d, 0x1e, 0x0f
+    };
+    sw_token_config bad_config = sw_token_config_default();
+    sw_tokens* defaults = sw_tokens_create(NULL);
+    sw_token_config config = sw_token_config_default();
+    sw_mgr* mgr = sw_mgr_create(NULL);
+    sw_test_server_state state = {0};
+    u16 port;
+    sw_test_response response;
+    char token_id[128];
+    char token_cookie[256];
+    char refreshed_cookie[256];
+    char replacement_cookie[256];
+    char second_cookie[256];
+    char third_cookie[256];
+    char request[1024];
+    char bad_cookie[256];
+
+    assert(defaults != NULL);
+    sw_tokens_destroy(defaults);
+
+    bad_config.secret = secret;
+    bad_config.secret_len = 31;
+    assert(sw_tokens_create(&bad_config) == NULL);
+
+    config.cookie_name = "tok";
+    config.secret = secret;
+    config.secret_len = sizeof(secret);
+    config.ttl_seconds = 60;
+    config.max_tokens = 8;
+    config.max_items = 2;
+    state.tokens = sw_tokens_create(&config);
+
+    assert(mgr != NULL);
+    assert(state.tokens != NULL);
+    assert(sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state) == 0);
+    port = sw_mgr_get_listener_port(mgr, 0);
+    assert(port != 0);
+
+    response = issue_request(mgr, port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "login id=") != NULL);
+    assert(strstr(response.data, "user_id=user-1 role=admin") != NULL);
+    response_body_field(&response, "id=", token_id, sizeof(token_id));
+    response_cookie_value(&response, "tok", token_cookie, sizeof(token_cookie));
+    assert(strlen(token_id) == 64);
+    assert(strncmp(token_cookie, "v1.", 3) == 0);
+    assert(strcmp(token_cookie, token_id) != 0);
+    assert(strstr(token_cookie, token_id) == NULL);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        token_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    assert(strstr(response.data, "current id=") != NULL);
+    assert(strstr(response.data, token_id) != NULL);
+    assert(strstr(response.data, "user_id=user-1 role=admin") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=v1.") != NULL);
+    response_cookie_value(&response, "tok", refreshed_cookie, sizeof(refreshed_cookie));
+    assert(strncmp(refreshed_cookie, "v1.", 3) == 0);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-login HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        refreshed_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    response_cookie_value(&response, "tok", replacement_cookie, sizeof(replacement_cookie));
+    assert(strncmp(replacement_cookie, "v1.", 3) == 0);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        refreshed_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        replacement_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    response_cookie_value(&response, "tok", refreshed_cookie, sizeof(refreshed_cookie));
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /token-items HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "first=0 second=0 third=-1 removed=0 third_after_remove=0") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    response_cookie_value(&response, "tok", second_cookie, sizeof(second_cookie));
+    free(response.data);
+
+    response = issue_request(mgr, port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    response_cookie_value(&response, "tok", third_cookie, sizeof(third_cookie));
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-logout HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        second_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; HttpOnly; SameSite=Lax") != NULL);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        second_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=%s\r\n"
+        "\r\n",
+        third_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+    free(response.data);
+
+    tamper_cookie_value(refreshed_cookie, bad_cookie, sizeof(bad_cookie));
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+        bad_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    strcpy(bad_cookie, refreshed_cookie);
+    bad_cookie[10] = '\0';
+    assert(snprintf(request, sizeof(request),
+        "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+        bad_cookie) > 0);
+    response = issue_request(mgr, port, request);
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=v1.!!!!\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "GET /token-current HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Cookie: tok=v2.not-a-token\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+    assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+    free(response.data);
+
+    sw_mgr_destroy(mgr);
+    sw_tokens_destroy(state.tokens);
+
+    {
+        sw_token_config expire_config = config;
+        sw_mgr* expire_mgr = sw_mgr_create(NULL);
+        sw_test_server_state expire_state = {0};
+        u16 expire_port;
+
+        expire_config.ttl_seconds = 1;
+        expire_config.max_tokens = 4;
+        expire_state.tokens = sw_tokens_create(&expire_config);
+        assert(expire_mgr != NULL);
+        assert(expire_state.tokens != NULL);
+        assert(sw_http_listen(expire_mgr, "http://127.0.0.1:0", sw_test_handler, &expire_state) == 0);
+        expire_port = sw_mgr_get_listener_port(expire_mgr, 0);
+        assert(expire_port != 0);
+
+        response = issue_request(expire_mgr, expire_port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert_complete_response(&response);
+        response_cookie_value(&response, "tok", token_cookie, sizeof(token_cookie));
+        free(response.data);
+
+        sw_test_sleep_ms(1100);
+        assert(snprintf(request, sizeof(request),
+            "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+            token_cookie) > 0);
+        response = issue_request(expire_mgr, expire_port, request);
+        assert_complete_response(&response);
+        assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+        assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+        free(response.data);
+
+        sw_mgr_destroy(expire_mgr);
+        sw_tokens_destroy(expire_state.tokens);
+    }
+
+    {
+        sw_token_config evict_config = config;
+        sw_mgr* evict_mgr = sw_mgr_create(NULL);
+        sw_test_server_state evict_state = {0};
+        u16 evict_port;
+        char first_cookie[256];
+
+        evict_config.max_tokens = 2;
+        evict_state.tokens = sw_tokens_create(&evict_config);
+        assert(evict_mgr != NULL);
+        assert(evict_state.tokens != NULL);
+        assert(sw_http_listen(evict_mgr, "http://127.0.0.1:0", sw_test_handler, &evict_state) == 0);
+        evict_port = sw_mgr_get_listener_port(evict_mgr, 0);
+        assert(evict_port != 0);
+
+        response = issue_request(evict_mgr, evict_port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert_complete_response(&response);
+        response_cookie_value(&response, "tok", first_cookie, sizeof(first_cookie));
+        free(response.data);
+
+        sw_test_sleep_ms(2);
+        response = issue_request(evict_mgr, evict_port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert_complete_response(&response);
+        response_cookie_value(&response, "tok", second_cookie, sizeof(second_cookie));
+        free(response.data);
+
+        sw_test_sleep_ms(2);
+        response = issue_request(evict_mgr, evict_port, "GET /token-login HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert_complete_response(&response);
+        response_cookie_value(&response, "tok", third_cookie, sizeof(third_cookie));
+        free(response.data);
+
+        assert(snprintf(request, sizeof(request),
+            "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+            first_cookie) > 0);
+        response = issue_request(evict_mgr, evict_port, request);
+        assert_complete_response(&response);
+        assert(strstr(response.data, "HTTP/1.1 401 Unauthorized") != NULL);
+        assert(strstr(response.data, "Set-Cookie: tok=; Max-Age=0;") != NULL);
+        free(response.data);
+
+        assert(snprintf(request, sizeof(request),
+            "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+            second_cookie) > 0);
+        response = issue_request(evict_mgr, evict_port, request);
+        assert_complete_response(&response);
+        assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+        free(response.data);
+
+        assert(snprintf(request, sizeof(request),
+            "GET /token-current HTTP/1.1\r\nHost: localhost\r\nCookie: tok=%s\r\n\r\n",
+            third_cookie) > 0);
+        response = issue_request(evict_mgr, evict_port, request);
+        assert_complete_response(&response);
+        assert(strstr(response.data, "HTTP/1.1 200 OK") != NULL);
+        free(response.data);
+
+        sw_mgr_destroy(evict_mgr);
+        sw_tokens_destroy(evict_state.tokens);
+    }
+#else
+    assert(sw_tokens_create(NULL) == NULL);
+#endif
+}
+
 static void test_server_config(void) {
     sw_http_config config = sw_http_config_default();
     sw_mgr* mgr;
@@ -1716,6 +2165,7 @@ static const sw_named_test sw_named_tests[] = {
     { "live_server", test_live_server },
     { "cookie_helpers", test_cookie_helpers },
     { "session_helpers", test_session_helpers },
+    { "token_helpers", test_token_helpers },
     { "server_config", test_server_config },
     { "tls_support", test_tls_support }
 };
