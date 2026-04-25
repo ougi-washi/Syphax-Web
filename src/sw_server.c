@@ -29,10 +29,9 @@ typedef enum {
     SW_PARSE_PENDING = 0,
     SW_PARSE_READY = 1,
     SW_PARSE_BAD_REQUEST = -1,
-    SW_PARSE_UNSUPPORTED_CHUNKED = -2,
-    SW_PARSE_HEADERS_TOO_LARGE = -3,
-    SW_PARSE_PAYLOAD_TOO_LARGE = -4,
-    SW_PARSE_TOO_MANY_HEADERS = -5
+    SW_PARSE_HEADERS_TOO_LARGE = -2,
+    SW_PARSE_PAYLOAD_TOO_LARGE = -3,
+    SW_PARSE_TOO_MANY_HEADERS = -4
 } sw_parse_result;
 
 #if defined(SYPHAX_WEB_HAS_TLS)
@@ -99,7 +98,6 @@ struct sw_tokens {
 static sz sw_socket_runtime_users = 0;
 static sw_mgr* sw_signal_mgr = NULL;
 
-static sz sw_server_config_max_request_bytes(const sw_server_config* config);
 static void sw_http_header_array_free_owned(sw_http_header_array* headers);
 static b8 sw_parse_content_length_value(const c8* value, sz value_len, sz* out_length);
 static b8 sw_ascii_case_equal_range(const c8* lhs, const c8* rhs, sz len);
@@ -599,22 +597,6 @@ static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset) {
     return sw_find_bytes_from(data, data_len, offset, "\r\n", 2);
 }
 
-static sz sw_server_config_max_request_bytes(const sw_server_config* config) {
-    sz total = 4;
-
-    if (config == NULL) {
-        return SIZE_MAX;
-    }
-    if (config->max_header_bytes > SIZE_MAX - total) {
-        return SIZE_MAX;
-    }
-    total += config->max_header_bytes;
-    if (config->max_body_bytes > SIZE_MAX - total) {
-        return SIZE_MAX;
-    }
-    return total + config->max_body_bytes;
-}
-
 static void sw_http_header_array_free_owned(sw_http_header_array* headers) {
     sz i;
     sw_http_header* data;
@@ -687,6 +669,190 @@ static b8 sw_ascii_case_equal_range(const c8* lhs, const c8* rhs, sz len) {
         }
     }
     return 1;
+}
+
+static b8 sw_http_header_value_has_token(const c8* value, const c8* token) {
+    const sz token_len = token != NULL ? strlen(token) : 0;
+    sz cursor = 0;
+
+    if (value == NULL || token == NULL || token_len == 0) {
+        return 0;
+    }
+
+    while (value[cursor] != '\0') {
+        sz begin;
+        sz end;
+
+        while (value[cursor] == ',' || isspace((unsigned char)value[cursor])) {
+            ++cursor;
+        }
+        begin = cursor;
+        while (value[cursor] != '\0' && value[cursor] != ',') {
+            ++cursor;
+        }
+        end = cursor;
+        while (end > begin && isspace((unsigned char)value[end - 1])) {
+            --end;
+        }
+
+        if (end > begin
+            && end - begin == token_len
+            && sw_ascii_case_equal_range(value + begin, token, token_len)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int sw_hex_digit_value(c8 ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + (ch - 'a');
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + (ch - 'A');
+    }
+    return -1;
+}
+
+static b8 sw_parse_chunk_size_value(const c8* value, sz value_len, sz* out_size) {
+    sz size = 0;
+    sz i = 0;
+    b8 saw_digit = 0;
+
+    if (out_size != NULL) {
+        *out_size = 0;
+    }
+    if (value == NULL || out_size == NULL) {
+        return 0;
+    }
+
+    while (i < value_len) {
+        const int digit = sw_hex_digit_value(value[i]);
+        if (digit < 0) {
+            break;
+        }
+        if (size > (SIZE_MAX - (sz)digit) / 16) {
+            return 0;
+        }
+        size = (size * 16) + (sz)digit;
+        saw_digit = 1;
+        ++i;
+    }
+    if (!saw_digit) {
+        return 0;
+    }
+
+    while (i < value_len && (value[i] == ' ' || value[i] == '\t')) {
+        ++i;
+    }
+    if (i < value_len && value[i] != ';') {
+        return 0;
+    }
+
+    *out_size = size;
+    return 1;
+}
+
+static sw_parse_result sw_decode_chunked_body(
+    const c8* data,
+    sz data_len,
+    sz body_offset,
+    sz max_body_bytes,
+    sz max_trailer_bytes,
+    c8** out_body,
+    sz* out_body_len,
+    sz* out_request_len
+) {
+    sw_char_array decoded;
+    sz cursor = body_offset;
+
+    if (out_body != NULL) {
+        *out_body = NULL;
+    }
+    if (out_body_len != NULL) {
+        *out_body_len = 0;
+    }
+    if (out_request_len != NULL) {
+        *out_request_len = 0;
+    }
+    if (data == NULL || out_body == NULL || out_body_len == NULL || out_request_len == NULL || body_offset > data_len) {
+        return SW_PARSE_BAD_REQUEST;
+    }
+
+    sw_char_array_init(&decoded);
+
+    for (;;) {
+        const sz line_end = sw_find_crlf_from(data, data_len, cursor);
+        sz chunk_size;
+
+        if (line_end == SIZE_MAX) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_PENDING;
+        }
+        if (!sw_parse_chunk_size_value(data + cursor, line_end - cursor, &chunk_size)) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_BAD_REQUEST;
+        }
+        cursor = line_end + 2;
+
+        if (chunk_size == 0) {
+            sz body_len;
+
+            if (cursor + 2 <= data_len && data[cursor] == '\r' && data[cursor + 1] == '\n') {
+                *out_request_len = cursor + 2;
+            } else {
+                const sz trailer_end = sw_find_bytes_from(data, data_len, cursor, "\r\n\r\n", 4);
+                if (trailer_end == SIZE_MAX) {
+                    if (data_len - cursor > max_trailer_bytes) {
+                        sw_char_array_free(&decoded);
+                        return SW_PARSE_HEADERS_TOO_LARGE;
+                    }
+                    sw_char_array_free(&decoded);
+                    return SW_PARSE_PENDING;
+                }
+                if (trailer_end - cursor > max_trailer_bytes) {
+                    sw_char_array_free(&decoded);
+                    return SW_PARSE_HEADERS_TOO_LARGE;
+                }
+                *out_request_len = trailer_end + 4;
+            }
+
+            body_len = sw_char_array_size(&decoded);
+            *out_body = sw_strdup_range(sw_char_array_data(&decoded), body_len);
+            sw_char_array_free(&decoded);
+            if (*out_body == NULL) {
+                return SW_PARSE_BAD_REQUEST;
+            }
+            *out_body_len = body_len;
+            return SW_PARSE_READY;
+        }
+
+        if (chunk_size > max_body_bytes - sw_char_array_size(&decoded)) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_PAYLOAD_TOO_LARGE;
+        }
+        if (chunk_size > data_len - cursor) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_PENDING;
+        }
+        if (data_len - cursor - chunk_size < 2) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_PENDING;
+        }
+        if (data[cursor + chunk_size] != '\r' || data[cursor + chunk_size + 1] != '\n') {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_BAD_REQUEST;
+        }
+        if (!sw_char_array_append_bytes(&decoded, data + cursor, chunk_size)) {
+            sw_char_array_free(&decoded);
+            return SW_PARSE_BAD_REQUEST;
+        }
+        cursor += chunk_size + 2;
+    }
 }
 
 static b8 sw_parse_listen_url_scheme(
@@ -1468,7 +1634,7 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
                 goto payload_too_large;
             }
         } else if (sw_stricmp_ascii(name, "Transfer-Encoding") == 0) {
-            if (sw_strcasestr_ascii(value, "chunked") != NULL) {
+            if (sw_http_header_value_has_token(value, "chunked")) {
                 parsed_request.is_chunked = 1;
             }
         }
@@ -1477,7 +1643,44 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
     }
 
     if (parsed_request.is_chunked) {
-        goto unsupported_chunked;
+        c8* chunked_body = NULL;
+        sz chunked_body_len = 0;
+        sz request_len = 0;
+        sw_parse_result chunked_result;
+
+        if (saw_content_length) {
+            goto bad_request;
+        }
+
+        chunked_result = sw_decode_chunked_body(
+            data,
+            data_len,
+            header_end + 4,
+            config->max_body_bytes,
+            config->max_header_bytes,
+            &chunked_body,
+            &chunked_body_len,
+            &request_len);
+        if (chunked_result != SW_PARSE_READY) {
+            free(chunked_body);
+            free((void*)parsed_request.method);
+            free((void*)parsed_request.uri);
+            free((void*)parsed_request.proto);
+            sw_http_header_array_free_owned(&parsed_headers);
+            return chunked_result;
+        }
+
+        parsed_request.body = chunked_body;
+        parsed_request.body_len = chunked_body_len;
+        parsed_request.content_length = chunked_body_len;
+        parsed_request.headers = s_array_get_data(&parsed_headers);
+        parsed_request.num_headers = s_array_get_size(&parsed_headers);
+
+        connection->header_storage = parsed_headers;
+        connection->request = parsed_request;
+        connection->request_ready = 1;
+        connection->parsed_request_bytes = request_len;
+        return SW_PARSE_READY;
     }
     if (parsed_request.content_length > config->max_body_bytes) {
         goto payload_too_large;
@@ -1509,13 +1712,6 @@ pending:
     free((void*)parsed_request.proto);
     sw_http_header_array_free_owned(&parsed_headers);
     return SW_PARSE_PENDING;
-
-unsupported_chunked:
-    free((void*)parsed_request.method);
-    free((void*)parsed_request.uri);
-    free((void*)parsed_request.proto);
-    sw_http_header_array_free_owned(&parsed_headers);
-    return SW_PARSE_UNSUPPORTED_CHUNKED;
 
 too_many_headers:
     free((void*)parsed_request.method);
@@ -1682,7 +1878,6 @@ static int sw_mgr_drain_pending_connections(sw_mgr* mgr) {
 int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
     c8 chunk[4096];
     b8 read_any = 0;
-    const sz max_request_bytes = sw_server_config_max_request_bytes(&mgr->config);
 
     if (connection->write_shutdown) {
         return sw_connection_discard_available_plain_input(mgr, connection);
@@ -1730,11 +1925,6 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
                 return -1;
             }
             sw_connection_mark_activity(connection, sw_now_ms());
-            if (sw_char_array_size(&connection->read_buffer) > max_request_bytes) {
-                connection->must_close = 1;
-                sw_http_reply_status_text(connection, 413, "Payload Too Large");
-                return 0;
-            }
             continue;
         }
 #if defined(SYPHAX_WEB_HAS_TLS)
@@ -1787,11 +1977,6 @@ static int sw_connection_process_input(sw_mgr* mgr, sw_connection* connection) {
             }
             return 0;
         case SW_PARSE_PENDING:
-            return 0;
-        case SW_PARSE_UNSUPPORTED_CHUNKED:
-            connection->must_close = 1;
-            sw_http_replyf(connection, 501, "text/plain; charset=utf-8", "Chunked requests are not supported");
-            sw_mgr_sync_connection(mgr, connection);
             return 0;
         case SW_PARSE_HEADERS_TOO_LARGE:
         case SW_PARSE_TOO_MANY_HEADERS:

@@ -1610,6 +1610,27 @@ static void test_live_server(void) {
     assert(strstr(response.data, "name=Jane Doe") != NULL);
     free(response.data);
 
+    response = issue_request(mgr, port,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "4\r\n"
+        "name\r\n"
+        "1\r\n"
+        "=\r\n"
+        "4;ext=ok\r\n"
+        "Jane\r\n"
+        "4\r\n"
+        "+Doe\r\n"
+        "0\r\n"
+        "X-Test-Trailer: yes\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "name=Jane Doe") != NULL);
+    free(response.data);
+
     response = issue_request(mgr, port, "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n");
     assert_complete_response(&response);
     assert(strstr(response.data, "Content-Type: text/css; charset=utf-8") != NULL);
@@ -1644,6 +1665,43 @@ static void test_live_server(void) {
     free(response.data);
 
     keep_fd = connect_to_port(port);
+    assert(send(keep_fd,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "d\r\n"
+        "name=Jane+Doe\r\n"
+        "0\r\n"
+        "\r\n",
+        (int)strlen(
+            "POST /form HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "d\r\n"
+            "name=Jane+Doe\r\n"
+            "0\r\n"
+            "\r\n"),
+        0) == (int)strlen(
+            "POST /form HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "d\r\n"
+            "name=Jane+Doe\r\n"
+            "0\r\n"
+            "\r\n"));
+    response = read_response_from_socket(mgr, keep_fd, 80, 5, 1);
+    assert_complete_response(&response);
+    assert(!response.closed);
+    assert(strstr(response.data, "name=Jane Doe") != NULL);
+    assert(strstr(response.data, "Connection: keep-alive") != NULL);
+    free(response.data);
+
     assert(send(keep_fd,
         "GET /health-missing HTTP/1.1\r\nHost: localhost\r\n\r\n",
         (int)strlen("GET /health-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"),
@@ -1702,7 +1760,7 @@ static void test_live_server(void) {
     assert(strstr(response.data, "HTTP/1.1 404 Not Found") != NULL);
     free(response.data);
 
-    assert(state.request_count == 13);
+    assert(state.request_count == 15);
     remove(file_path);
 #ifdef _WIN32
     RemoveDirectoryA(docroot_path);
@@ -2150,6 +2208,32 @@ static void test_server_config(void) {
         "12345678901234567890");
     assert_complete_response(&response);
     assert(strstr(response.data, "HTTP/1.1 413 Payload Too Large") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "11\r\n"
+        "12345678901234567\r\n"
+        "0\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 413 Payload Too Large") != NULL);
+    free(response.data);
+
+    response = issue_request(mgr, port,
+        "POST /form HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "z\r\n"
+        "name=Jane+Doe\r\n"
+        "0\r\n"
+        "\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 400 Bad Request") != NULL);
     free(response.data);
 
     fd = connect_to_port(port);
