@@ -261,36 +261,24 @@ sw_translator_set_language(tr, "ja");
 
 English source text is the fallback. The installed file is `share/syphax_web/translations.json`.
 
-## Common API
-
-- HTML: `sw_html`, `sw_div`, `sw_form`, `sw_input`, `sw_text`, `sw_attr`, `sw_attrs`
-- HTTP: `sw_http_is`, `sw_http_path_is`, `sw_http_path_starts`, `sw_http_get_query`, `sw_http_get_form`, `sw_http_get_cookie`, `sw_http_next_multipart`, `sw_http_multipart_save`, `sw_http_upload_save`, `sw_http_upload_save_fields`, `sw_http_set_header`, `sw_http_redirect`, `sw_http_set_cookie`, `sw_http_clear_cookie`, `sw_http_reply`, `sw_http_replyf`, `sw_http_serve_path`
-- Sessions: `sw_sessions_create`, `sw_sessions_start`, `sw_session_get`, `sw_session_set`, `sw_sessions_end`, `sw_sessions_destroy`
-- Tokens: `sw_tokens_create`, `sw_tokens_login`, `sw_tokens_current`, `sw_token_get`, `sw_token_set`, `sw_tokens_logout`
-- Database: `sw_db_open`, `sw_db_exec`, `sw_db_prepare`, `sw_db_bind_text`, `sw_db_bind_int`, `sw_db_step`, `sw_db_column_text`, `sw_db_column_int`, `sw_db_begin`, `sw_db_commit`, `sw_db_rollback`
-- JS: `sw_js_live_search`, `sw_js_live`, `sw_js_fetch`, `sw_js_toggle`, `sw_js_class`
-- Utility: `sw_matches_query`
-- Syphax: installed `syphax/s_json.h` includes parse, write, typed getters, object/array helpers, and simple JSON paths.
-
 Large multipart uploads save only to caller-provided paths; the caller owns those files and cleanup.
 
 ## Examples
 
-Build outputs:
-
 Run one example at a time. They all bind port `8000`.
+Open HTTP examples at `http://127.0.0.1:8000` and HTTPS examples at `https://127.0.0.1:8000`.
 For HTTPS examples, build with `./build.sh -tls`.
 For the database example, build with `./build.sh -sqlite`, `./build.sh -postgres`, or `./build.sh -db`.
 
-- `bin/01_http`: basic app on `http://127.0.0.1:8000`, or `https://127.0.0.1:8000` in a TLS build
-- `bin/02_https`: HTTPS status page on `https://127.0.0.1:8000`
-- `bin/03_static_site`: static HTTPS site on `https://127.0.0.1:8000`
-- `bin/04_live_queue`: live form demo on `https://127.0.0.1:8000`
-- `bin/05_folder_app`: folder-backed app on `https://127.0.0.1:8000`
-- `bin/06_session_login`: HTTPS session login demo on `https://127.0.0.1:8000`
-- `bin/07_database`: database-backed counter on `http://127.0.0.1:8000` in database builds
+- `bin/01_http`: basic HTTP app; HTTPS in a TLS build
+- `bin/02_https`: HTTPS status page
+- `bin/03_static_site`: static HTTPS site
+- `bin/04_live_queue`: live form demo
+- `bin/05_folder_app`: folder-backed app
+- `bin/06_session_login`: HTTPS session login demo
+- `bin/07_database`: database-backed counter in database builds
 
-## Fit
+## Scope
 
 Use Syphax-Web for embedded tools, local dashboards, internal services, and small server-rendered apps.
 
