@@ -55,6 +55,8 @@ static b8 sw_parse_listen_url_scheme(
 static sz sw_find_bytes_from(const c8* data, sz data_len, sz offset, const c8* needle, sz needle_len);
 static sz sw_find_crlf_from(const c8* data, sz data_len, sz offset);
 static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms);
+static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection);
+static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connection* connection);
 static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
 static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
@@ -867,6 +869,63 @@ b8 sw_connection_has_pending_output(const sw_connection* connection) {
         && (sw_char_array_size(&connection->write_buffer) > 0 || connection->file_stream != NULL);
 }
 
+static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection) {
+    if (mgr == NULL || connection == NULL) {
+        return -1;
+    }
+#if defined(SYPHAX_WEB_HAS_TLS)
+    if (connection->tls != NULL) {
+        sw_mgr_close_connection(mgr, connection);
+        return -1;
+    }
+#endif
+    if (!connection->write_shutdown) {
+#ifdef _WIN32
+        if (shutdown(connection->fd, SD_SEND) != 0) {
+#else
+        if (shutdown(connection->fd, SHUT_WR) != 0) {
+#endif
+            sw_mgr_close_connection(mgr, connection);
+            return -1;
+        }
+        connection->write_shutdown = 1;
+        connection->close_after_write = 0;
+        sw_connection_mark_activity(connection, sw_get_time());
+    }
+    return sw_mgr_sync_connection(mgr, connection);
+}
+
+static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connection* connection) {
+    c8 chunk[4096];
+
+    if (mgr == NULL || connection == NULL) {
+        return -1;
+    }
+#if defined(SYPHAX_WEB_HAS_TLS)
+    if (connection->tls != NULL) {
+        return 0;
+    }
+#endif
+
+    for (;;) {
+        const int read_bytes = (int)recv(connection->fd, chunk, sizeof(chunk), 0);
+        if (read_bytes > 0) {
+            continue;
+        }
+        if (read_bytes == 0) {
+            sw_mgr_close_connection(mgr, connection);
+            return -1;
+        }
+
+        if (sw_socket_error_is_would_block(sw_socket_last_error())) {
+            return 0;
+        }
+
+        sw_mgr_close_connection(mgr, connection);
+        return -1;
+    }
+}
+
 b8 sw_connection_wants_read(const sw_connection* connection) {
     if (connection == NULL) {
         return 0;
@@ -1172,6 +1231,10 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
     b8 read_any = 0;
     const sz max_request_bytes = sw_http_config_max_request_bytes(&mgr->config);
 
+    if (connection->write_shutdown) {
+        return sw_connection_discard_available_plain_input(mgr, connection);
+    }
+
 #if defined(SYPHAX_WEB_HAS_TLS)
     if (sw_connection_tls_handshake_pending(connection)) {
         const int tls_rc = sw_connection_tls_handshake(mgr, connection);
@@ -1325,8 +1388,7 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
     }
 
     if (sw_char_array_size(&connection->write_buffer) == 0 && connection->file_stream == NULL && connection->close_after_write) {
-        sw_mgr_close_connection(mgr, connection);
-        return -1;
+        return sw_connection_shutdown_send(mgr, connection);
     }
 
     sw_mgr_sync_connection(mgr, connection);
@@ -1580,6 +1642,20 @@ static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connec
         return -1;
     }
 
+    if (connection->write_shutdown) {
+        if (mgr->config.idle_timeout_ms > 0) {
+            const f64 idle_remaining_ms = (f64)mgr->config.idle_timeout_ms - (now_ms - connection->last_activity_at_ms);
+            if (idle_remaining_ms <= 0.0) {
+                return 0;
+            }
+            if (idle_remaining_ms > (f64)INT_MAX) {
+                return INT_MAX;
+            }
+            return (i32)idle_remaining_ms;
+        }
+        return -1;
+    }
+
     if (connection->close_after_write && sw_connection_has_pending_output(connection)) {
         return -1;
     }
@@ -1661,12 +1737,19 @@ static void sw_mgr_enforce_timeouts(sw_mgr* mgr) {
         const i32 remaining_ms = sw_connection_remaining_timeout_ms(mgr, connection, now_ms);
 
         if (remaining_ms == 0) {
+            if (connection->write_shutdown) {
+                sw_mgr_close_connection(mgr, connection);
+                continue;
+            }
 #if defined(SYPHAX_WEB_HAS_TLS)
             if (sw_connection_tls_handshake_pending(connection)) {
                 sw_mgr_close_connection(mgr, connection);
                 continue;
             }
 #endif
+            if (sw_connection_discard_available_plain_input(mgr, connection) < 0) {
+                continue;
+            }
             if (sw_http_reply_status_text(connection, 408, "Request Timeout") != 0) {
                 continue;
             }

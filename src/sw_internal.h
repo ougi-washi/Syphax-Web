@@ -118,6 +118,7 @@ struct sw_connection {
     b8 request_ready;
     b8 headers_complete;
     b8 close_after_write;
+    b8 write_shutdown;
     FILE* file_stream;
     sz file_remaining;
     f64 opened_at_ms;
