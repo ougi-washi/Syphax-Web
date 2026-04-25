@@ -11,10 +11,6 @@ typedef struct {
     const c8* body;
 } card;
 
-typedef struct {
-    sw_translator* translator;
-} app_state;
-
 static const metric metrics[] = {
     { "Routes", "5", "HTML, JSON, text, and CSS responses" },
     { "Mode", "TLS", "OpenSSL-backed HTTPS listener" },
@@ -132,8 +128,7 @@ static void render_page(
 }
 
 static void handle_request(sw_connection* connection, const sw_http_message* request, void* user_data) {
-    app_state* state = (app_state*)user_data;
-    sw_translator* translator = state != NULL ? state->translator : NULL;
+    sw_translator* translator = (sw_translator*)user_data;
 
     if (serve_style(connection, request)) {
         return;
@@ -166,11 +161,11 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 
 int main(void) {
     sw_server_config config = server_config();
-    app_state state;
+    sw_translator* translator;
     i32 rc;
 
-    state.translator = example_translator();
-    if (state.translator == NULL) {
+    translator = example_translator();
+    if (translator == NULL) {
         fprintf(stderr, "Failed to load translations.\n");
         return 1;
     }
@@ -179,9 +174,9 @@ int main(void) {
         EXAMPLE_HTTPS_URL,
         &config,
         handle_request,
-        &state,
+        translator,
         "Syphax-Web static site example"
     );
-    sw_translator_destroy(state.translator);
+    sw_translator_destroy(translator);
     return rc;
 }

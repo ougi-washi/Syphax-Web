@@ -6,20 +6,18 @@
 
 #include <stdlib.h>
 
-struct sw_backend {
-    int unused;
-};
-
 int sw_backend_init(sw_mgr* mgr) {
-    mgr->backend = (sw_backend*)calloc(1, sizeof(*mgr->backend));
-    return (mgr->backend != NULL) ? 0 : -1;
+    if (mgr == NULL) {
+        return -1;
+    }
+    mgr->backend = NULL;
+    return 0;
 }
 
 void sw_backend_shutdown(sw_mgr* mgr) {
     if (mgr == NULL) {
         return;
     }
-    free(mgr->backend);
     mgr->backend = NULL;
 }
 
