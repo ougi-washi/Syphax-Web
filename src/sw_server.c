@@ -58,9 +58,11 @@ static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms);
 static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection);
 static int sw_connection_discard_available_plain_input(sw_mgr* mgr, sw_connection* connection);
 static void sw_mgr_flush_pending_output(sw_mgr* mgr);
+static i32 sw_server_run(sw_mgr* mgr);
 static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms);
 static void sw_mgr_enforce_timeouts(sw_mgr* mgr);
 static i32 sw_http_reply_status_text(sw_connection* connection, i32 status_code, const c8* body);
+static i32 sw_http_send_file(sw_connection* connection, const c8* path);
 static b8 sw_path_join(char* out, sz out_cap, const c8* lhs, const c8* rhs);
 static b8 sw_path_real(const c8* path, char* out, sz out_cap);
 static b8 sw_path_has_prefix(const c8* path, const c8* prefix);
@@ -377,7 +379,7 @@ static int sw_connection_tls_handshake(sw_mgr* mgr, sw_connection* connection) {
         connection->tls_read_wants_write = 0;
         connection->tls_write_wants_read = 0;
         sw_connection_tls_store_alpn(connection);
-        sw_connection_mark_activity(connection, sw_get_time());
+        sw_connection_mark_activity(connection, sw_now_ms());
         return 1;
     }
 
@@ -728,7 +730,7 @@ static sw_socket sw_create_listener_socket(const c8* host, const c8* port, u16* 
 static sw_connection* sw_connection_create(sw_mgr* mgr, sw_listener* listener, sw_socket fd, const c8* remote_ip, u16 remote_port) {
     sw_connection* connection = (sw_connection*)calloc(1, sizeof(*connection));
     s_handle handle;
-    const f64 now_ms = sw_get_time();
+    const f64 now_ms = sw_now_ms();
 
     if (connection == NULL) {
         return NULL;
@@ -813,7 +815,7 @@ void sw_connection_reset_request(sw_connection* connection) {
     memset(&connection->request, 0, sizeof(connection->request));
     connection->request_ready = 0;
     connection->headers_complete = 0;
-    connection->phase_started_at_ms = sw_get_time();
+    connection->phase_started_at_ms = sw_now_ms();
 }
 
 static void sw_connection_mark_activity(sw_connection* connection, f64 now_ms) {
@@ -891,7 +893,7 @@ static int sw_connection_shutdown_send(sw_mgr* mgr, sw_connection* connection) {
         }
         connection->write_shutdown = 1;
         connection->close_after_write = 0;
-        sw_connection_mark_activity(connection, sw_get_time());
+        sw_connection_mark_activity(connection, sw_now_ms());
     }
     return sw_mgr_sync_connection(mgr, connection);
 }
@@ -1015,7 +1017,7 @@ static sw_parse_result sw_connection_try_parse_request(sw_connection* connection
     }
     if (!connection->headers_complete) {
         connection->headers_complete = 1;
-        connection->phase_started_at_ms = sw_get_time();
+        connection->phase_started_at_ms = sw_now_ms();
     }
 
     first_line_end = sw_find_crlf_from(data, header_end, 0);
@@ -1201,7 +1203,12 @@ static int sw_connection_fill_file_buffer(sw_connection* connection) {
             return 0;
         }
         connection->file_remaining -= read_bytes;
-        sw_char_array_append_bytes(&connection->write_buffer, chunk, read_bytes);
+        if (!sw_char_array_append_bytes(&connection->write_buffer, chunk, read_bytes)) {
+            fclose(connection->file_stream);
+            connection->file_stream = NULL;
+            connection->file_remaining = 0;
+            return -1;
+        }
     }
 
     if (connection->file_remaining == 0 && connection->file_stream != NULL) {
@@ -1283,7 +1290,7 @@ int sw_mgr_connection_readable(sw_mgr* mgr, sw_connection* connection) {
 #endif
             read_any = 1;
             sw_char_array_append_bytes(&connection->read_buffer, chunk, (sz)read_bytes);
-            sw_connection_mark_activity(connection, sw_get_time());
+            sw_connection_mark_activity(connection, sw_now_ms());
             if (sw_char_array_size(&connection->read_buffer) > max_request_bytes) {
                 sw_http_reply_status_text(connection, 413, "Payload Too Large");
                 return 0;
@@ -1366,7 +1373,10 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
     }
 #endif
 
-    sw_connection_fill_file_buffer(connection);
+    if (sw_connection_fill_file_buffer(connection) < 0) {
+        sw_mgr_close_connection(mgr, connection);
+        return -1;
+    }
 
     while (sw_char_array_size(&connection->write_buffer) > 0) {
         const c8* data = sw_char_array_data(&connection->write_buffer);
@@ -1379,10 +1389,13 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
         sent_bytes = (int)send(connection->fd, data, (int)data_len, 0);
         if (sent_bytes > 0) {
 #endif
-            sw_connection_mark_activity(connection, sw_get_time());
+            sw_connection_mark_activity(connection, sw_now_ms());
             sw_char_array_consume_prefix(&connection->write_buffer, (sz)sent_bytes);
             if (sw_char_array_size(&connection->write_buffer) == 0) {
-                sw_connection_fill_file_buffer(connection);
+                if (sw_connection_fill_file_buffer(connection) < 0) {
+                    sw_mgr_close_connection(mgr, connection);
+                    return -1;
+                }
             }
             continue;
         }
@@ -1405,7 +1418,10 @@ int sw_mgr_connection_writable(sw_mgr* mgr, sw_connection* connection) {
     }
 
     if (sw_char_array_size(&connection->write_buffer) == 0) {
-        sw_connection_fill_file_buffer(connection);
+        if (sw_connection_fill_file_buffer(connection) < 0) {
+            sw_mgr_close_connection(mgr, connection);
+            return -1;
+        }
     }
 
     if (sw_char_array_size(&connection->write_buffer) == 0 && connection->file_stream == NULL && connection->close_after_write) {
@@ -1569,7 +1585,7 @@ i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* us
     return 0;
 }
 
-i32 sw_https_listen(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data) {
+i32 sw_http_listen_tls(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data) {
 #if defined(SYPHAX_WEB_HAS_TLS)
     c8 host[256];
     c8 port[32];
@@ -1726,7 +1742,7 @@ static i32 sw_connection_remaining_timeout_ms(const sw_mgr* mgr, const sw_connec
 
 static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms) {
     i32 effective_timeout_ms = timeout_ms;
-    const f64 now_ms = sw_get_time();
+    const f64 now_ms = sw_now_ms();
     sw_connection* const* connections;
     sz i;
 
@@ -1750,7 +1766,7 @@ static i32 sw_mgr_effective_poll_timeout(const sw_mgr* mgr, i32 timeout_ms) {
 }
 
 static void sw_mgr_enforce_timeouts(sw_mgr* mgr) {
-    const f64 now_ms = sw_get_time();
+    const f64 now_ms = sw_now_ms();
     sz i = 0;
 
     if (mgr == NULL) {
@@ -1838,6 +1854,18 @@ i32 sw_server_listen(const c8* url, const sw_http_config* config, sw_http_handle
         return rc;
     }
 
+    rc = sw_server_run(mgr);
+    sw_mgr_destroy(mgr);
+    return rc;
+}
+
+static i32 sw_server_run(sw_mgr* mgr) {
+    i32 rc = 0;
+
+    if (mgr == NULL) {
+        return -1;
+    }
+
     sw_signal_mgr = mgr;
 #ifdef _WIN32
     SetConsoleCtrlHandler(sw_console_handler, TRUE);
@@ -1861,7 +1889,6 @@ i32 sw_server_listen(const c8* url, const sw_http_config* config, sw_http_handle
 #endif
     sw_signal_mgr = NULL;
 
-    sw_mgr_destroy(mgr);
     return rc;
 }
 
@@ -1879,35 +1906,13 @@ i32 sw_server_listen_tls(
         return -1;
     }
 
-    rc = sw_https_listen(mgr, url, tls, handler, user_data);
+    rc = sw_http_listen_tls(mgr, url, tls, handler, user_data);
     if (rc != 0) {
         sw_mgr_destroy(mgr);
         return rc;
     }
 
-    sw_signal_mgr = mgr;
-#ifdef _WIN32
-    SetConsoleCtrlHandler(sw_console_handler, TRUE);
-#else
-    signal(SIGINT, sw_signal_handler);
-    signal(SIGTERM, sw_signal_handler);
-#endif
-
-    while (sw_mgr_is_running(mgr)) {
-        if (sw_mgr_poll(mgr, 100) < 0) {
-            rc = -1;
-            break;
-        }
-    }
-
-#ifdef _WIN32
-    SetConsoleCtrlHandler(sw_console_handler, FALSE);
-#else
-    signal(SIGINT, SIG_DFL);
-    signal(SIGTERM, SIG_DFL);
-#endif
-    sw_signal_mgr = NULL;
-
+    rc = sw_server_run(mgr);
     sw_mgr_destroy(mgr);
     return rc;
 }
@@ -1925,7 +1930,7 @@ static int sw_connection_begin_response(sw_connection* connection, i32 status_co
         (content_type != NULL) ? content_type : "text/plain; charset=utf-8",
         content_length);
 
-    if (written < 0) {
+    if (written < 0 || (sz)written >= sizeof(headers)) {
         return -1;
     }
 
@@ -1944,7 +1949,7 @@ i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* content_
     if (body_len > 0 && !sw_char_array_append_bytes(&connection->write_buffer, body, body_len)) {
         return -1;
     }
-    sw_connection_mark_activity(connection, sw_get_time());
+    sw_connection_mark_activity(connection, sw_now_ms());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -1959,7 +1964,11 @@ i32 sw_http_replyf(sw_connection* connection, i32 status_code, const c8* content
 
     sw_char_array_init(&body);
     va_start(ap, fmt);
-    sw_char_array_append_vformat(&body, fmt, ap);
+    if (!sw_char_array_append_vformat(&body, fmt, ap)) {
+        va_end(ap);
+        sw_char_array_free(&body);
+        return -1;
+    }
     va_end(ap);
 
     rc = sw_http_reply(connection, status_code, content_type, sw_char_array_data(&body), sw_char_array_size(&body));
@@ -1974,7 +1983,7 @@ i32 sw_http_write(sw_connection* connection, const void* data, sz data_len) {
     if (!sw_char_array_append_bytes(&connection->write_buffer, data, data_len)) {
         return -1;
     }
-    sw_connection_mark_activity(connection, sw_get_time());
+    sw_connection_mark_activity(connection, sw_now_ms());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -1993,7 +2002,7 @@ i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...) {
     if (!ok) {
         return -1;
     }
-    sw_connection_mark_activity(connection, sw_get_time());
+    sw_connection_mark_activity(connection, sw_now_ms());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -2163,16 +2172,12 @@ static const c8* sw_guess_content_type(const c8* path) {
     return "application/octet-stream";
 }
 
-i32 sw_http_serve_file(sw_connection* connection, const c8* path) {
+static i32 sw_http_send_file(sw_connection* connection, const c8* path) {
     struct stat st;
     FILE* file;
 
     if (connection == NULL || path == NULL) {
         return -1;
-    }
-
-    if (strstr(path, "..") != NULL) {
-        return sw_http_replyf(connection, 403, "text/plain; charset=utf-8", "Forbidden");
     }
 
     if (stat(path, &st) != 0) {
@@ -2181,6 +2186,9 @@ i32 sw_http_serve_file(sw_connection* connection, const c8* path) {
 
     if (S_ISDIR(st.st_mode)) {
         return sw_http_replyf(connection, 403, "text/plain; charset=utf-8", "Directory listing not allowed");
+    }
+    if (st.st_size < 0 || (uintmax_t)st.st_size > (uintmax_t)SIZE_MAX) {
+        return sw_http_reply_status_text(connection, 413, "Payload Too Large");
     }
 
     file = fopen(path, "rb");
@@ -2198,8 +2206,10 @@ i32 sw_http_serve_file(sw_connection* connection, const c8* path) {
     }
     connection->file_stream = file;
     connection->file_remaining = (sz)st.st_size;
-    sw_connection_fill_file_buffer(connection);
-    sw_connection_mark_activity(connection, sw_get_time());
+    if (sw_connection_fill_file_buffer(connection) < 0) {
+        return -1;
+    }
+    sw_connection_mark_activity(connection, sw_now_ms());
     return sw_mgr_sync_connection(connection->mgr, connection);
 }
 
@@ -2231,7 +2241,7 @@ i32 sw_http_serve_path(sw_connection* connection, const c8* docroot, const c8* r
     if (!sw_path_has_prefix(target_real, docroot_real)) {
         return sw_http_reply_status_text(connection, 403, "Forbidden");
     }
-    return sw_http_serve_file(connection, target_real);
+    return sw_http_send_file(connection, target_real);
 }
 
 const c8* sw_http_header_get(const sw_http_message* hm, const c8* name) {
@@ -2602,17 +2612,6 @@ i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_
     return sw_http_decode_var(hm->body, hm->body_len, name, buf, buf_len, 0);
 }
 
-i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len) {
-    if (hm == NULL || hm->body == NULL) {
-        if (buf != NULL && buf_len > 0) {
-            buf[0] = '\0';
-        }
-        return -1;
-    }
-
-    return sw_http_decode_var(hm->body, hm->body_len, name, buf, buf_len, -1);
-}
-
 i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset) {
     const c8* content_type;
     char boundary[256];
@@ -2635,11 +2634,17 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
     if (content_type == NULL || !sw_http_content_type_boundary(content_type, boundary, sizeof(boundary))) {
         return 0;
     }
-    if (snprintf(boundary_marker, sizeof(boundary_marker), "--%s", boundary) < 0) {
-        return 0;
+    {
+        const int written = snprintf(boundary_marker, sizeof(boundary_marker), "--%s", boundary);
+        if (written < 0 || (sz)written >= sizeof(boundary_marker)) {
+            return 0;
+        }
     }
-    if (snprintf(next_boundary_marker, sizeof(next_boundary_marker), "\r\n%s", boundary_marker) < 0) {
-        return 0;
+    {
+        const int written = snprintf(next_boundary_marker, sizeof(next_boundary_marker), "\r\n%s", boundary_marker);
+        if (written < 0 || (sz)written >= sizeof(next_boundary_marker)) {
+            return 0;
+        }
     }
     part_boundary = sw_find_multipart_boundary(hm->body, body_len, *offset, boundary_marker, strlen(boundary_marker), 0);
     if (part_boundary == NULL) {
@@ -2675,6 +2680,9 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
 
     memset(mp, 0, sizeof(*mp));
     mp->boundary = sw_strdup_cstr(boundary);
+    if (mp->boundary == NULL) {
+        goto fail;
+    }
     mp->data = body_start;
     mp->data_len = (sz)(next_boundary - body_start);
     if (mp->data_len >= 2 && next_boundary[-2] == '\r' && next_boundary[-1] == '\n') {
@@ -2693,11 +2701,17 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
 
         if (sw_header_value_matches_name(line, line_len, "Content-Disposition")) {
             mp->name = sw_parse_disposition_param(line, line_len, "name");
+            if (mp->name == NULL) {
+                goto fail;
+            }
             mp->filename = sw_parse_disposition_param(line, line_len, "filename");
         } else if (sw_header_value_matches_name(line, line_len, "Content-Type")) {
             const c8* colon = memchr(line, ':', line_len);
             if (colon != NULL) {
                 mp->content_type = sw_strdup_trimmed_range(colon + 1, line_len - (sz)(colon + 1 - line));
+                if (mp->content_type == NULL) {
+                    goto fail;
+                }
             }
         }
 
@@ -2706,6 +2720,10 @@ i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz*
 
     *offset = (sz)(next_boundary - hm->body);
     return 1;
+
+fail:
+    sw_http_multipart_clear(mp);
+    return 0;
 }
 
 void sw_http_multipart_clear(sw_http_multipart* mp) {

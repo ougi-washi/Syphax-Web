@@ -65,7 +65,7 @@ SW_API sw_tls_config sw_tls_config_default(void);
 SW_API sw_mgr* sw_mgr_create(const sw_http_config* config);
 SW_API void sw_mgr_destroy(sw_mgr* mgr);
 SW_API i32 sw_http_listen(sw_mgr* mgr, const c8* url, sw_http_handler handler, void* user_data);
-SW_API i32 sw_https_listen(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data);
+SW_API i32 sw_http_listen_tls(sw_mgr* mgr, const c8* url, const sw_tls_config* tls, sw_http_handler handler, void* user_data);
 SW_API i32 sw_mgr_poll(sw_mgr* mgr, i32 timeout_ms);
 SW_API void sw_mgr_request_stop(sw_mgr* mgr);
 SW_API b8 sw_mgr_is_running(const sw_mgr* mgr);
@@ -78,14 +78,12 @@ SW_API i32 sw_http_reply(sw_connection* connection, i32 status_code, const c8* c
 SW_API i32 sw_http_replyf(sw_connection* connection, i32 status_code, const c8* content_type, const c8* fmt, ...);
 SW_API i32 sw_http_write(sw_connection* connection, const void* data, sz data_len);
 SW_API i32 sw_http_printf(sw_connection* connection, const c8* fmt, ...);
-SW_API i32 sw_http_serve_file(sw_connection* connection, const c8* path);
 SW_API i32 sw_http_serve_path(sw_connection* connection, const c8* docroot, const c8* request_path);
 
 SW_API b8 sw_http_is(const sw_http_message* hm, const c8* method, const c8* path);
 SW_API const c8* sw_http_header_get(const sw_http_message* hm, const c8* name);
 SW_API i32 sw_http_get_query(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_get_form(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
-SW_API i32 sw_http_get_var(const sw_http_message* hm, const c8* name, c8* buf, sz buf_len);
 SW_API i32 sw_http_next_multipart(const sw_http_message* hm, sw_http_multipart* mp, sz* offset);
 SW_API void sw_http_multipart_clear(sw_http_multipart* mp);
 

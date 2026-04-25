@@ -142,17 +142,12 @@ fi
 if [ "${clean}" -eq 1 ] || [ "${previous_bin_config}" != "${bin_config}" ]; then
   echo "Refreshing shared bin outputs for ${build_dir} (${build_type}, TLS=${tls_value})"
   rm -f \
-    bin/01_simple \
-    bin/02_ssl \
-    bin/03_complex_static \
-    bin/04_complex_dynamic \
-    bin/05_web_app \
-    bin/syphax_web_tests \
-    bin/syphax_web_example_simple \
-    bin/syphax_web_example_ssl \
-    bin/syphax_web_example_complex_static \
-    bin/syphax_web_example_complex_dynamic \
-    bin/syphax_web_example_web_app
+    bin/01_http \
+    bin/02_https \
+    bin/03_static_site \
+    bin/04_live_queue \
+    bin/05_folder_app \
+    bin/syphax_web_tests
 fi
 
 echo "Configuring ${build_dir} (${build_type}, TLS=${tls_value})"

@@ -147,6 +147,6 @@ int main(void) {
         &config,
         handle_request,
         NULL,
-        "Syphax-Web complex static example"
+        "Syphax-Web static site example"
     );
 }

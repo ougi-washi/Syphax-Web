@@ -77,15 +77,15 @@ typedef struct {
 
 SW_API b8 sw_js_runtime(sw_buffer* buffer);
 SW_API b8 sw_js_live_search(sw_buffer* buffer, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint);
-SW_API b8 sw_js_live_cfg(sw_buffer* buffer, const sw_js_live_opts* opt);
-SW_API b8 sw_js_fetch_cfg(sw_buffer* buffer, const sw_js_fetch_opts* opt);
-SW_API b8 sw_js_toggle_cfg(sw_buffer* buffer, const sw_js_toggle_opts* opt);
-SW_API b8 sw_js_class_cfg(sw_buffer* buffer, const sw_js_class_opts* opt);
+SW_API b8 (sw_js_live)(sw_buffer* buffer, const sw_js_live_opts* opt);
+SW_API b8 (sw_js_fetch)(sw_buffer* buffer, const sw_js_fetch_opts* opt);
+SW_API b8 (sw_js_toggle)(sw_buffer* buffer, const sw_js_toggle_opts* opt);
+SW_API b8 (sw_js_class)(sw_buffer* buffer, const sw_js_class_opts* opt);
 
-#define sw_js_live(_buffer, ...) sw_js_live_cfg((_buffer), &(sw_js_live_opts){ __VA_ARGS__ })
-#define sw_js_fetch(_buffer, ...) sw_js_fetch_cfg((_buffer), &(sw_js_fetch_opts){ __VA_ARGS__ })
-#define sw_js_toggle(_buffer, ...) sw_js_toggle_cfg((_buffer), &(sw_js_toggle_opts){ __VA_ARGS__ })
-#define sw_js_class(_buffer, ...) sw_js_class_cfg((_buffer), &(sw_js_class_opts){ __VA_ARGS__ })
+#define sw_js_live(_buffer, ...) (sw_js_live)((_buffer), &(sw_js_live_opts){ __VA_ARGS__ })
+#define sw_js_fetch(_buffer, ...) (sw_js_fetch)((_buffer), &(sw_js_fetch_opts){ __VA_ARGS__ })
+#define sw_js_toggle(_buffer, ...) (sw_js_toggle)((_buffer), &(sw_js_toggle_opts){ __VA_ARGS__ })
+#define sw_js_class(_buffer, ...) (sw_js_class)((_buffer), &(sw_js_class_opts){ __VA_ARGS__ })
 
 #ifdef __cplusplus
 }

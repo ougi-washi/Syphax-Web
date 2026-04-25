@@ -5,7 +5,7 @@ static void render_home(sw_connection* connection) {
 
     sw_html(h, sw_attrs(sw_attr("lang", "en")), {
         sw_head(h, sw_attrs(), {
-            render_head(h, "Syphax-Web Simple");
+            render_head(h, "Syphax-Web HTTP");
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell")), {
@@ -69,7 +69,7 @@ static void handle_request(sw_connection* connection, const sw_http_message* req
 int main(void) {
     sw_http_config config = http_config();
 
-    printf("Syphax-Web simple HTTP example\n");
+    printf("Syphax-Web HTTP example\n");
     printf("Open http://127.0.0.1:8000 in your browser\n");
     return sw_server_listen("http://127.0.0.1:8000", &config, handle_request, NULL);
 }

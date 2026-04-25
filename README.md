@@ -36,11 +36,11 @@ Run `./build.sh --help` for build script options. The script reuses the selected
 
 Repo binaries when examples and tests are enabled:
 
-- `bin/01_simple`
-- `bin/02_ssl`
-- `bin/03_complex_static`
-- `bin/04_complex_dynamic`
-- `bin/05_web_app`
+- `bin/01_http`
+- `bin/02_https`
+- `bin/03_static_site`
+- `bin/04_live_queue`
+- `bin/05_folder_app`
 - `bin/syphax_web_tests`
 
 Install:
@@ -122,7 +122,7 @@ if (sw_http_is(hm, "GET", "/style.css")) {
 }
 ```
 
-`sw_http_serve_file` still exists for explicit file paths, but `sw_http_serve_path` is the safer default for request-driven asset serving.
+Request-driven assets should go through `sw_http_serve_path`; it rejects traversal outside the docroot.
 
 ## Server Config
 
@@ -171,8 +171,8 @@ sw_translator* tr = sw_translator_create("resources/translations.json",
     .label = "English",
     .direction = SW_LANGUAGE_DIRECTION_LTR
 );
-sw_add_language(tr, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
-sw_add_language(tr, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+sw_translator_add(tr, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
+sw_translator_add(tr, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
 sw_translator_set_language(tr, "ja");
 ```
 
@@ -186,11 +186,11 @@ Installed translations file:
 
 All examples use the shared stylesheet in `examples/shared/style.css`.
 
-- `bin/01_simple`: HTTP-only minimal server on `http://127.0.0.1:8000`
-- `bin/02_ssl`: HTTPS status page on `https://127.0.0.1:8443`
-- `bin/03_complex_static`: HTTPS static site with HTML, JSON, text, and CSS routes on `https://127.0.0.1:8444`
-- `bin/04_complex_dynamic`: HTTPS dynamic queue using query/form helpers and inline JS helpers on `https://127.0.0.1:8445`
-- `bin/05_web_app`: HTTPS folder app served from `examples/advanced` on `https://127.0.0.1:8446`
+- `bin/01_http`: HTTP-only minimal server on `http://127.0.0.1:8000`
+- `bin/02_https`: HTTPS status page on `https://127.0.0.1:8443`
+- `bin/03_static_site`: HTTPS static site with HTML, JSON, text, and CSS routes on `https://127.0.0.1:8444`
+- `bin/04_live_queue`: HTTPS live queue using query/form helpers and inline JS helpers on `https://127.0.0.1:8445`
+- `bin/05_folder_app`: HTTPS folder app served from `examples/advanced` on `https://127.0.0.1:8446`
 
 The TLS examples require a certificate and private key. Do not commit private keys to the repo. For local HTTPS, generate a localhost certificate with a local CA such as `mkcert`:
 
@@ -202,7 +202,7 @@ mkcert \
   localhost 127.0.0.1 ::1
 
 ./build.sh -tls
-./bin/02_ssl
+./bin/02_https
 ```
 
 The examples automatically use `examples/shared/localhost.local.crt` and `examples/shared/localhost.local.key` when they exist. Those files are ignored by git. You can also point at a real certificate explicitly:
@@ -212,7 +212,7 @@ If the browser still shows a warning after `mkcert -install`, restart the browse
 ```bash
 SYPHAX_WEB_TLS_CERT=/path/to/fullchain.pem \
 SYPHAX_WEB_TLS_KEY=/path/to/privkey.pem \
-./bin/02_ssl
+./bin/02_https
 ```
 
 ## Scope

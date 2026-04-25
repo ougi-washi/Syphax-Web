@@ -34,6 +34,18 @@ function(syphax_web_set_runtime_output target)
     endforeach()
 endfunction()
 
+function(syphax_web_enable_target_warnings target)
+    if(NOT SYPHAX_WEB_ENABLE_WARNINGS)
+        return()
+    endif()
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+    endif()
+endfunction()
+
 set(SYPHAX_WEB_PUBLIC_HEADERS
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_export.h
     ${SYPHAX_WEB_INCLUDE_DIR}/sw_utility.h
@@ -101,18 +113,14 @@ if(SYPHAX_WEB_ENABLE_TLS)
     target_compile_definitions(syphax_web PUBLIC SYPHAX_WEB_HAS_TLS)
 endif()
 
-if(SYPHAX_WEB_ENABLE_WARNINGS)
-    if(MSVC)
-        target_compile_options(syphax_web PRIVATE /W4)
-    else()
-        target_compile_options(syphax_web PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
-    endif()
-endif()
+syphax_web_enable_target_warnings(syphax_web)
 
 set_target_properties(syphax_web PROPERTIES
     OUTPUT_NAME syphax_web
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
+    C_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
 )
 
 source_group(TREE "${SYPHAX_WEB_INCLUDE_DIR}" PREFIX "include" FILES ${SYPHAX_WEB_PUBLIC_HEADERS})
@@ -124,23 +132,18 @@ function(syphax_web_add_example target source output_name)
     target_link_libraries(${target} PRIVATE syphax_web::syphax_web)
     target_compile_features(${target} PRIVATE c_std_11)
     target_compile_definitions(${target} PRIVATE SYPHAX_WEB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/examples")
     set_target_properties(${target} PROPERTIES OUTPUT_NAME ${output_name})
     syphax_web_set_runtime_output(${target})
-    if(SYPHAX_WEB_ENABLE_WARNINGS)
-        if(MSVC)
-            target_compile_options(${target} PRIVATE /W4)
-        else()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
-        endif()
-    endif()
+    syphax_web_enable_target_warnings(${target})
 endfunction()
 
 if(SYPHAX_WEB_BUILD_EXAMPLES)
-    syphax_web_add_example(example_01_simple examples/01_simple.c 01_simple)
-    syphax_web_add_example(example_02_ssl examples/02_ssl.c 02_ssl)
-    syphax_web_add_example(example_03_complex_static examples/03_complex_static.c 03_complex_static)
-    syphax_web_add_example(example_04_complex_dynamic examples/04_complex_dynamic.c 04_complex_dynamic)
-    syphax_web_add_example(example_05_web_app examples/05_web_app.c 05_web_app)
+    syphax_web_add_example(example_01_http examples/01_http.c 01_http)
+    syphax_web_add_example(example_02_https examples/02_https.c 02_https)
+    syphax_web_add_example(example_03_static_site examples/03_static_site.c 03_static_site)
+    syphax_web_add_example(example_04_live_queue examples/04_live_queue.c 04_live_queue)
+    syphax_web_add_example(example_05_folder_app examples/05_folder_app.c 05_folder_app)
 endif()
 
 if(SYPHAX_WEB_BUILD_TESTS)
@@ -153,13 +156,7 @@ if(SYPHAX_WEB_BUILD_TESTS)
     if(UNIX AND NOT APPLE)
         target_link_libraries(syphax_web_tests PRIVATE pthread)
     endif()
-    if(SYPHAX_WEB_ENABLE_WARNINGS)
-        if(MSVC)
-            target_compile_options(syphax_web_tests PRIVATE /W4)
-        else()
-            target_compile_options(syphax_web_tests PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
-        endif()
-    endif()
+    syphax_web_enable_target_warnings(syphax_web_tests)
     add_test(NAME syphax_web_tests_all COMMAND syphax_web_tests)
     add_test(NAME syphax_web_tests_translator COMMAND syphax_web_tests translator)
     add_test(NAME syphax_web_tests_html_short_api COMMAND syphax_web_tests html_short_api)

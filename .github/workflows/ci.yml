@@ -25,7 +25,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y cmake ninja-build libssl-dev
 
       - name: Configure
         run: >
@@ -66,6 +66,66 @@ jobs:
           EOF
           cmake -S consumer -B consumer/build -G Ninja -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install"
           cmake --build consumer/build --parallel "$(nproc)"
+
+      - name: Configure shared
+        run: >
+          cmake -S . -B build-shared -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_SHARED_LIBS=ON
+          -DSYPHAX_WEB_BUILD_EXAMPLES=ON
+          -DSYPHAX_WEB_BUILD_TESTS=ON
+          -DSYPHAX_WEB_ENABLE_WARNINGS=ON
+
+      - name: Build shared
+        run: cmake --build build-shared --parallel "$(nproc)"
+
+      - name: Run shared tests
+        run: ctest --test-dir build-shared --output-on-failure
+
+      - name: Check shared exports
+        run: |
+          nm -D --defined-only build-shared/libsyphax_web.so | awk '{print $3}' | sort > shared-symbols.txt
+          grep -qx sw_http_listen_tls shared-symbols.txt
+          grep -qx sw_translator_add shared-symbols.txt
+          grep -qx sw_js_live shared-symbols.txt
+          ! grep -E '(_internal|_cfg|sw_backend_|sw_socket_|sw_char_array_|sw_strdup_|sw_now_ms|sw_read_file|sw_http_status_text)' shared-symbols.txt
+
+      - name: Shared install smoke test
+        run: |
+          cmake --install build-shared --prefix "${{ github.workspace }}/install-shared"
+          test -f "${{ github.workspace }}/install-shared/share/syphax_web/translations.json"
+          mkdir -p consumer-shared
+          cat > consumer-shared/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(syphax_web_consumer_shared C)
+          find_package(syphax_web CONFIG REQUIRED)
+          add_executable(consumer_shared main.c)
+          target_link_libraries(consumer_shared PRIVATE syphax_web::syphax_web)
+          EOF
+          cat > consumer-shared/main.c <<'EOF'
+          #include "sw_server.h"
+          int main(void) {
+              sw_http_config config = sw_http_config_default();
+              return config.max_body_bytes == 0;
+          }
+          EOF
+          cmake -S consumer-shared -B consumer-shared/build -G Ninja -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install-shared"
+          cmake --build consumer-shared/build --parallel "$(nproc)"
+
+      - name: Configure TLS
+        run: >
+          cmake -S . -B build-tls -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DSYPHAX_WEB_BUILD_EXAMPLES=ON
+          -DSYPHAX_WEB_BUILD_TESTS=ON
+          -DSYPHAX_WEB_ENABLE_WARNINGS=ON
+          -DSYPHAX_WEB_ENABLE_TLS=ON
+
+      - name: Build TLS
+        run: cmake --build build-tls --parallel "$(nproc)"
+
+      - name: Run TLS tests
+        run: ctest --test-dir build-tls --output-on-failure
 
   linux-sanitizers:
     name: Linux Sanitizers

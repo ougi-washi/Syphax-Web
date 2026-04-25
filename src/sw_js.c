@@ -270,10 +270,10 @@ b8 sw_js_live_search(sw_buffer* h, const c8* form_id, const c8* input_id, const 
         .prevent_submit = 1
     };
 
-    return sw_js_live_cfg(h, &options);
+    return (sw_js_live)(h, &options);
 }
 
-b8 sw_js_live_cfg(sw_buffer* h, const sw_js_live_opts* opt) {
+b8 (sw_js_live)(sw_buffer* h, const sw_js_live_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -288,7 +288,7 @@ b8 sw_js_live_cfg(sw_buffer* h, const sw_js_live_opts* opt) {
     return ok;
 }
 
-b8 sw_js_fetch_cfg(sw_buffer* h, const sw_js_fetch_opts* opt) {
+b8 (sw_js_fetch)(sw_buffer* h, const sw_js_fetch_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -303,7 +303,7 @@ b8 sw_js_fetch_cfg(sw_buffer* h, const sw_js_fetch_opts* opt) {
     return ok;
 }
 
-b8 sw_js_toggle_cfg(sw_buffer* h, const sw_js_toggle_opts* opt) {
+b8 (sw_js_toggle)(sw_buffer* h, const sw_js_toggle_opts* opt) {
     sw_char_array config;
     b8 ok;
 
@@ -318,7 +318,7 @@ b8 sw_js_toggle_cfg(sw_buffer* h, const sw_js_toggle_opts* opt) {
     return ok;
 }
 
-b8 sw_js_class_cfg(sw_buffer* h, const sw_js_class_opts* opt) {
+b8 (sw_js_class)(sw_buffer* h, const sw_js_class_opts* opt) {
     sw_char_array config;
     b8 ok;
 

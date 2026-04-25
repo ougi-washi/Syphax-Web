@@ -29,9 +29,9 @@ typedef struct {
 #define sw_attr_no_translate(...) sw_attr_no_translate_impl(__VA_ARGS__)
 #define sw_attr_no_translate_impl(_name, _value) ((sw_attr_item){ .name = (_name), .value = (_value), .enabled = 1, .no_translate = 1 })
 #define sw_attr_bool(_name, _enabled) ((sw_attr_item){ .name = (_name), .enabled = (_enabled), .is_boolean = 1 })
-#define sw_translation(_enabled) "__sw_translation__", ((_enabled) ? "1" : "0")
 #define sw_direction_value(_direction) (((_direction) == SW_LANGUAGE_DIRECTION_RTL) ? "rtl" : (((_direction) == SW_LANGUAGE_DIRECTION_TTB) ? "ttb" : "ltr"))
-#define sw_direction(_direction) "__sw_direction__", sw_direction_value(_direction)
+#define sw_attr_translation(_enabled) ((sw_attr_item){ .name = "__sw_translation__", .value = ((_enabled) ? "1" : "0"), .enabled = 1 })
+#define sw_attr_direction(_direction) ((sw_attr_item){ .name = "__sw_direction__", .value = sw_direction_value(_direction), .enabled = 1 })
 #define sw_attrs(...) sw_attrs_impl(((const sw_attr_item[]){ {0}, __VA_ARGS__ }), sizeof((const sw_attr_item[]){ {0}, __VA_ARGS__ }) / sizeof(sw_attr_item))
 #define sw_attrs_impl(_items, _count) ((sw_attr_list){ .items = (_items) + 1, .count = (_count) - 1 })
 

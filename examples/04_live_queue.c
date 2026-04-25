@@ -123,12 +123,12 @@ static void render_home(sw_connection* connection, const app_state* state) {
 
     sw_html(h, sw_attrs(sw_attr("lang", "en")), {
         sw_head(h, sw_attrs(), {
-            render_head(h, "Syphax-Web Dynamic");
+            render_head(h, "Syphax-Web Live Queue");
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell wide")), {
                 sw_section(h, sw_attrs(sw_attr("class", "hero compact")), {
-                    sw_span(h, sw_attrs(sw_attr("class", "kicker secure")), { sw_text(h, "Dynamic HTTPS"); });
+                    sw_span(h, sw_attrs(sw_attr("class", "kicker secure")), { sw_text(h, "Live HTTPS"); });
                     sw_h1(h, sw_attrs(), { sw_text(h, "Interactive work queue"); });
                     sw_p(h, sw_attrs(sw_attr("class", "lead")), {
                         sw_text(h, "The handler reads query strings and form bodies, updates process memory, and returns partial HTML.");
@@ -246,6 +246,6 @@ int main(void) {
         &config,
         handle_request,
         &state,
-        "Syphax-Web complex dynamic example"
+        "Syphax-Web live queue example"
     );
 }

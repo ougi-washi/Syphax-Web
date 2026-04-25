@@ -8,7 +8,7 @@ static void render_home(sw_connection* connection) {
 
     sw_html(h, sw_attrs(sw_attr("lang", "en")), {
         sw_head(h, sw_attrs(), {
-            render_head(h, "Syphax-Web SSL");
+            render_head(h, "Syphax-Web HTTPS");
         });
         sw_body(h, sw_attrs(sw_attr("class", "page")), {
             sw_main(h, sw_attrs(sw_attr("class", "shell")), {
@@ -74,6 +74,6 @@ int main(void) {
         &config,
         handle_request,
         NULL,
-        "Syphax-Web SSL example"
+        "Syphax-Web HTTPS example"
     );
 }

@@ -2,24 +2,11 @@
 #include "sw_internal.h"
 
 #include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#ifdef _WIN32
-static INIT_ONCE sw_random_once = INIT_ONCE_STATIC_INIT;
-
-static BOOL CALLBACK sw_seed_random_once(PINIT_ONCE init_once, PVOID parameter, PVOID* context) {
-    (void)init_once;
-    (void)parameter;
-    (void)context;
-    srand((unsigned int) time(NULL));
-    return TRUE;
-}
-#else
-static b8 sw_random_seeded = 0;
-#endif
 
 char* sw_strdup_cstr(const c8* str) {
     if (str == NULL) {
@@ -296,7 +283,7 @@ sz sw_char_array_size(const sw_char_array* array) {
     return sw_char_array_content_size(array);
 }
 
-f64 sw_get_time(void) {
+f64 sw_now_ms(void) {
 #ifdef _WIN32
     LARGE_INTEGER frequency;
     LARGE_INTEGER counter;
@@ -310,7 +297,7 @@ f64 sw_get_time(void) {
 #endif
 }
 
-c8* sw_get_file_content(const c8* file_path, sz* buffer_size) {
+c8* sw_read_file(const c8* file_path, sz* buffer_size) {
     FILE* file;
     long size;
     c8* content;
@@ -333,11 +320,14 @@ c8* sw_get_file_content(const c8* file_path, sz* buffer_size) {
     }
 
     size = ftell(file);
-    if (size < 0) {
+    if (size < 0 || (unsigned long)size > (unsigned long)(SIZE_MAX - 1)) {
         fclose(file);
         return NULL;
     }
-    rewind(file);
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
 
     content = (c8*)malloc((sz)size + 1);
     if (content == NULL) {
@@ -351,7 +341,7 @@ c8* sw_get_file_content(const c8* file_path, sz* buffer_size) {
         return NULL;
     }
 
-    content[size] = '\0';
+    content[(sz)size] = '\0';
     fclose(file);
 
     if (buffer_size != NULL) {
@@ -359,72 +349,4 @@ c8* sw_get_file_content(const c8* file_path, sz* buffer_size) {
     }
 
     return content;
-}
-
-b8 sw_generate_unique_filename(const c8* original_name, c8* new_name, sz max_len) {
-    const c8* ext;
-    time_t raw_time;
-    struct tm time_info;
-    int random_num;
-
-    if (new_name == NULL || max_len == 0) {
-        return 0;
-    }
-
-    raw_time = time(NULL);
-#ifdef _WIN32
-    localtime_s(&time_info, &raw_time);
-    InitOnceExecuteOnce(&sw_random_once, sw_seed_random_once, NULL, NULL);
-#else
-    localtime_r(&raw_time, &time_info);
-    if (!sw_random_seeded) {
-        sw_random_seeded = 1;
-        srand((unsigned int)raw_time);
-    }
-#endif
-
-    ext = (original_name != NULL) ? strrchr(original_name, '.') : NULL;
-    if (ext == NULL) {
-        ext = "";
-    }
-
-    random_num = rand() % 10000;
-
-    return snprintf(new_name, max_len, "file_%04d%02d%02d_%02d%02d%02d_%04d%s",
-        time_info.tm_year + 1900,
-        time_info.tm_mon + 1,
-        time_info.tm_mday,
-        time_info.tm_hour,
-        time_info.tm_min,
-        time_info.tm_sec,
-        random_num,
-        ext) > 0;
-}
-
-u32 sw_random(u32 min, u32 max) {
-    s_assertf(min <= max, "sw_random :: min must be <= max\n");
-#ifdef _WIN32
-    InitOnceExecuteOnce(&sw_random_once, sw_seed_random_once, NULL, NULL);
-#else
-    if (!sw_random_seeded) {
-        sw_random_seeded = 1;
-        srand((unsigned int) time(NULL));
-    }
-#endif
-    return min + (u32)(rand() % (int)(max - min + 1));
-}
-
-b8 sw_hash(const c8* str, c8* hash, sz hash_len) {
-    u32 hash_value = 5381u;
-    sz i;
-
-    if (str == NULL || hash == NULL || hash_len == 0) {
-        return 0;
-    }
-
-    for (i = 0; str[i] != '\0'; ++i) {
-        hash_value = ((hash_value << 5u) + hash_value) ^ (u32)(unsigned char)str[i];
-    }
-
-    return snprintf(hash, hash_len, "%u", hash_value) > 0;
 }

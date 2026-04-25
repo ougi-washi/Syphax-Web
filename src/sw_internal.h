@@ -152,6 +152,8 @@ char* sw_strdup_cstr(const c8* str);
 char* sw_strdup_range(const c8* str, sz len);
 int sw_stricmp_ascii(const c8* lhs, const c8* rhs);
 const c8* sw_strcasestr_ascii(const c8* haystack, const c8* needle);
+f64 sw_now_ms(void);
+c8* sw_read_file(const c8* file_path, sz* buffer_size);
 
 void sw_char_array_init(sw_char_array* array);
 void sw_char_array_free(sw_char_array* array);

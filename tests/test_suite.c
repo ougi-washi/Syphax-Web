@@ -39,8 +39,8 @@
 #endif
 
 typedef struct {
-    const c8* file_path;
     const c8* docroot;
+    const c8* file_name;
     int request_count;
 } sw_test_server_state;
 
@@ -157,6 +157,27 @@ static void temp_path(char* buffer, sz buffer_len, const char* name) {
 #endif
 }
 
+static void unique_name(const char* seed_name, char* buffer, sz buffer_len) {
+    static unsigned long counter = 0;
+    const char* ext;
+#ifdef _WIN32
+    const unsigned long pid = (unsigned long)GetCurrentProcessId();
+#else
+    const unsigned long pid = (unsigned long)getpid();
+#endif
+
+    assert(buffer != NULL);
+    assert(buffer_len > 0);
+
+    ext = (seed_name != NULL) ? strrchr(seed_name, '.') : NULL;
+    if (ext == NULL) {
+        ext = "";
+    }
+
+    ++counter;
+    assert(snprintf(buffer, buffer_len, "syphax_web_%lu_%lu%s", pid, counter, ext) > 0);
+}
+
 static void sw_test_sleep_ms(i32 duration_ms) {
 #ifdef _WIN32
     Sleep((DWORD)(duration_ms > 0 ? duration_ms : 0));
@@ -174,7 +195,7 @@ static void create_temp_directory(char* buffer, sz buffer_len, const char* seed_
     assert(seed_name != NULL);
 
     for (attempt = 0; attempt < 16; ++attempt) {
-        assert(sw_generate_unique_filename(seed_name, candidate_name, sizeof(candidate_name)));
+        unique_name(seed_name, candidate_name, sizeof(candidate_name));
         temp_path(buffer, buffer_len, candidate_name);
 #ifdef _WIN32
         if (CreateDirectoryA(buffer, NULL) != 0) {
@@ -194,10 +215,10 @@ static void create_temp_directory(char* buffer, sz buffer_len, const char* seed_
 }
 
 static void add_fixture_languages(sw_translator* translator) {
-    sw_add_language(translator, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
-    sw_add_language(translator, .code = "fa", .label = "Farsi", .direction = SW_LANGUAGE_DIRECTION_RTL);
-    sw_add_language(translator, .code = "zh", .label = "Chinese", .direction = SW_LANGUAGE_DIRECTION_LTR);
-    sw_add_language(translator, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator_add(translator, .code = "ar", .label = "Arabic", .direction = SW_LANGUAGE_DIRECTION_RTL);
+    sw_translator_add(translator, .code = "fa", .label = "Farsi", .direction = SW_LANGUAGE_DIRECTION_RTL);
+    sw_translator_add(translator, .code = "zh", .label = "Chinese", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator_add(translator, .code = "ja", .label = "Japanese", .direction = SW_LANGUAGE_DIRECTION_LTR);
 }
 
 static void load_fixture_translations(sw_translator* translator) {
@@ -209,7 +230,7 @@ static void load_fixture_translations(sw_translator* translator) {
 }
 
 static void load_fixture_french(sw_translator* translator) {
-    sw_add_language(translator, .code = "fr", .label = "French", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator_add(translator, .code = "fr", .label = "French", .direction = SW_LANGUAGE_DIRECTION_LTR);
     assert(sw_translator_load_json_text(translator, "fr",
         "{"
             "\"Search\":\"Rechercher\","
@@ -267,7 +288,7 @@ static void sw_test_handler(sw_connection* connection, const sw_http_message* re
     }
 
     if (sw_http_is(request, "GET", "/file")) {
-        assert(sw_http_serve_file(connection, state->file_path) == 0);
+        assert(sw_http_serve_path(connection, state->docroot, state->file_name) == 0);
         return;
     }
 
@@ -338,8 +359,10 @@ static void test_translator(void) {
     assert(current_language != NULL);
     assert(strcmp(current_language->code, "en") == 0);
     assert(!sw_translator_set_language(translator, "ja"));
+    assert(!sw_translator_add(translator, .code = NULL, .label = "Broken", .direction = SW_LANGUAGE_DIRECTION_LTR));
+    assert(!sw_translator_add(translator, .code = "", .label = "Broken", .direction = SW_LANGUAGE_DIRECTION_LTR));
 
-    sw_add_language(translator, .code = "de", .label = "German", .direction = SW_LANGUAGE_DIRECTION_LTR);
+    sw_translator_add(translator, .code = "de", .label = "German", .direction = SW_LANGUAGE_DIRECTION_LTR);
     assert(sw_translator_set_language(translator, "de"));
     current_language = sw_translator_get_language(translator);
     assert(current_language != NULL);
@@ -486,12 +509,12 @@ static void test_html_short_api(void) {
     sw_buffer_reset(h);
     assert(sw_translator_set_language(translator, "zh"));
     assert(sw_tag(h, "div", sw_attrs(
-        sw_attr(sw_translation(0)),
+        sw_attr_translation(0),
         sw_attr("title", "Search")
     )));
     assert(sw_text(h, "Search"));
     assert(sw_tag(h, "span", sw_attrs(
-        sw_attr(sw_translation(1)),
+        sw_attr_translation(1),
         sw_attr("title", "Search")
     )));
     assert(sw_text(h, "Search"));
@@ -504,7 +527,7 @@ static void test_html_short_api(void) {
     sw_buffer_reset(h);
     assert(sw_tag(h, "div", sw_attrs(
         sw_attr("style", "border-color:currentColor"),
-        sw_attr(sw_direction(SW_LANGUAGE_DIRECTION_TTB))
+        sw_attr_direction(SW_LANGUAGE_DIRECTION_TTB)
     )));
     assert(sw_text(h, "Search"));
     assert(sw_end(h, "div"));
@@ -649,10 +672,10 @@ static void test_js_short_api(void) {
     assert(h != NULL);
     assert(sw_js_runtime(h));
     assert(sw_js_runtime(h));
-    assert(sw_js_live_cfg(h, &live_search));
-    assert(sw_js_fetch_cfg(h, &fetch_replace));
-    assert(sw_js_toggle_cfg(h, &toggle));
-    assert(sw_js_class_cfg(h, &class_toggle));
+    assert((sw_js_live)(h, &live_search));
+    assert((sw_js_fetch)(h, &fetch_replace));
+    assert((sw_js_toggle)(h, &toggle));
+    assert((sw_js_class)(h, &class_toggle));
     assert(sw_js_live(h,
         .form_id = "macro-form",
         .input_id = "macro-input",
@@ -753,9 +776,6 @@ static void test_request_helpers(void) {
     assert(strcmp(value, "Jane Doe") == 0);
     assert(sw_http_get_form(&message, "missing", value, sizeof(value)) == 0);
     assert(strcmp(value, "") == 0);
-    assert(sw_http_get_var(&message, "name", value, sizeof(value)) > 0);
-    assert(strcmp(value, "Jane Doe") == 0);
-
     memset(&part, 0, sizeof(part));
     assert(sw_http_next_multipart(&multipart_message, &part, &offset) == 1);
     assert(strcmp(part.name, "file") == 0);
@@ -827,7 +847,25 @@ static void assert_simple_example_surface(const char* relative_path) {
     char* text = read_repo_file(relative_path);
 
     assert(strstr(text, "query[0] = '\\0'") == NULL);
-    assert(strstr(text, "sw_http_get_var(") == NULL);
+    assert(strstr(text, "sw_http_get" "_var(") == NULL);
+    assert(strstr(text, "sw_http_serve" "_file(") == NULL);
+    assert(strstr(text, "sw_https" "_listen(") == NULL);
+    assert(strstr(text, "sw_add" "_language(") == NULL);
+    assert(strstr(text, "sw_js_live" "_c" "fg(") == NULL);
+    assert(strstr(text, "sw_js_fetch" "_c" "fg(") == NULL);
+    assert(strstr(text, "sw_js_toggle" "_c" "fg(") == NULL);
+    assert(strstr(text, "sw_js_class" "_c" "fg(") == NULL);
+    assert(strstr(text, "sw_translator_create" "_internal") == NULL);
+    assert(strstr(text, "sw_add_language" "_internal") == NULL);
+    assert(strstr(text, "sw_translation" "(") == NULL);
+    assert(strstr(text, "sw_direction" "(") == NULL);
+    assert(strstr(text, "sw_get" "_time(") == NULL);
+    assert(strstr(text, "sw_get_file" "_content(") == NULL);
+    assert(strstr(text, "sw_generate_unique" "_filename(") == NULL);
+    assert(strstr(text, "sw_random" "(") == NULL);
+    assert(strstr(text, "sw_hash" "(") == NULL);
+    assert(strstr(text, "03_" "complex") == NULL);
+    assert(strstr(text, "04_" "complex") == NULL);
     free(text);
 }
 
@@ -835,17 +873,20 @@ static void test_public_short_names(void) {
     static const char* const paths[] = {
         "include/sw_html.h",
         "include/sw_js.h",
+        "include/sw_server.h",
+        "include/sw_translator.h",
+        "include/sw_utility.h",
         "examples/example_common.h",
-        "examples/01_simple.c",
-        "examples/02_ssl.c",
-        "examples/03_complex_static.c",
-        "examples/04_complex_dynamic.c",
-        "examples/05_web_app.c",
+        "examples/01_http.c",
+        "examples/02_https.c",
+        "examples/03_static_site.c",
+        "examples/04_live_queue.c",
+        "examples/05_folder_app.c",
         "tests/test_suite.c",
         "README.md"
     };
     static const char* const easy_paths[] = {
-        "examples/01_simple.c",
+        "examples/01_http.c",
         "README.md"
     };
     sz i;
@@ -1201,15 +1242,15 @@ static void test_live_server(void) {
 
     create_temp_directory(docroot_path, sizeof(docroot_path), "assets");
 
-    assert(sw_generate_unique_filename("fixture.txt", file_name, sizeof(file_name)));
+    unique_name("fixture.txt", file_name, sizeof(file_name));
     assert(snprintf(file_path, sizeof(file_path), "%s/%s", docroot_path, file_name) > 0);
     file = fopen(file_path, "wb");
     assert(file != NULL);
     fputs("public payload", file);
     fclose(file);
 
-    state.file_path = file_path;
     state.docroot = docroot_path;
+    state.file_name = file_name;
     state.request_count = 0;
 
     listen_rc = sw_http_listen(mgr, "http://127.0.0.1:0", sw_test_handler, &state);
@@ -1286,7 +1327,12 @@ static void test_live_server(void) {
     assert(strstr(response.data, "HTTP/1.1 403 Forbidden") != NULL);
     free(response.data);
 
-    assert(state.request_count == 9);
+    response = issue_request(mgr, port, "GET /public/missing.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_complete_response(&response);
+    assert(strstr(response.data, "HTTP/1.1 404 Not Found") != NULL);
+    free(response.data);
+
+    assert(state.request_count == 10);
     remove(file_path);
 #ifdef _WIN32
     RemoveDirectoryA(docroot_path);
@@ -1406,8 +1452,8 @@ static void test_tls_support(void) {
         u16 port;
         sw_test_response response;
 
-        assert(sw_generate_unique_filename("syphax-web-test-cert.pem", cert_name, sizeof(cert_name)));
-        assert(sw_generate_unique_filename("syphax-web-test-key.pem", key_name, sizeof(key_name)));
+        unique_name("syphax-web-test-cert.pem", cert_name, sizeof(cert_name));
+        unique_name("syphax-web-test-key.pem", key_name, sizeof(key_name));
         temp_path(cert_path, sizeof(cert_path), cert_name);
         temp_path(key_path, sizeof(key_path), key_name);
         write_test_tls_files(cert_path, key_path);
@@ -1416,8 +1462,8 @@ static void test_tls_support(void) {
         tls.private_key_file = key_path;
         tls.handshake_timeout_ms = 250;
 
-        assert(sw_https_listen(mgr, "http://127.0.0.1:0", &tls, sw_tls_test_handler, &state) != 0);
-        assert(sw_https_listen(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, &state) == 0);
+        assert(sw_http_listen_tls(mgr, "http://127.0.0.1:0", &tls, sw_tls_test_handler, &state) != 0);
+        assert(sw_http_listen_tls(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, &state) == 0);
         port = sw_mgr_get_listener_port(mgr, 0);
         assert(port != 0);
 
@@ -1446,7 +1492,7 @@ static void test_tls_support(void) {
 #else
     tls.certificate_file = "missing-cert.pem";
     tls.private_key_file = "missing-key.pem";
-    assert(sw_https_listen(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, NULL) != 0);
+    assert(sw_http_listen_tls(mgr, "https://127.0.0.1:0", &tls, sw_tls_test_handler, NULL) != 0);
 #endif
 
     sw_mgr_destroy(mgr);
