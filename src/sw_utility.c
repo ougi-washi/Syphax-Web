@@ -12,6 +12,7 @@
 #include "syphax/s_json.h"
 #include "syphax/s_memory.h"
 #include "syphax/s_thread.h"
+#undef SYPHAX_IMPLEMENTATION
 
 #include "sw_utility.h"
 #include "sw_internal.h"

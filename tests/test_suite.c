@@ -4,6 +4,9 @@
 #include "sw_server.h"
 #include "sw_translator.h"
 #include "sw_utility.h"
+#ifndef SYPHAX_STATIC
+#    define SYPHAX_STATIC
+#endif
 #include "syphax/s_thread.h"
 
 #include <assert.h>
@@ -788,6 +791,12 @@ static void test_html_short_macros(void) {
     sw_el(h, "custom-card", sw_attrs(sw_attr("data-role", "demo")), {
         sw_text(h, "Custom");
     });
+    sw_table(h, sw_attrs(sw_attr("data-role", "grid")), {
+        sw_tr(h, sw_attrs(), {
+            sw_th(h, sw_attrs(), { sw_text(h, "Work"); });
+            sw_td(h, sw_attrs(), { sw_text(h, "Queue"); });
+        });
+    });
 
     html = sw_buffer_data(h);
     assert(strstr(html, "<title>队列</title>") != NULL);
@@ -804,6 +813,7 @@ static void test_html_short_macros(void) {
     assert(strstr(html, "<a href=\"/docs\">文档</a>") != NULL);
     assert(strstr(html, "<button type=\"button\">Open</button>") != NULL);
     assert(strstr(html, "<custom-card data-role=\"demo\">Custom</custom-card>") != NULL);
+    assert(strstr(html, "<table data-role=\"grid\"><tr><th>工作</th><td>队列</td></tr></table>") != NULL);
 
     sw_buffer_free(h);
     sw_translator_destroy(translator);
