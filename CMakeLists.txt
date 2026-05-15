@@ -69,8 +69,12 @@ set(SYPHAX_WEB_PRIVATE_HEADERS
 
 set(SYPHAX_WEB_VENDOR_HEADERS
     ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_math.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_files.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_json.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_memory.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_thread.h
 )
 
 set(SYPHAX_WEB_TRANSLATIONS_FILE
@@ -118,6 +122,9 @@ if(WIN32)
     target_link_libraries(syphax_web PUBLIC ws2_32 bcrypt)
 else()
     target_link_libraries(syphax_web PUBLIC Threads::Threads)
+    if(UNIX)
+        target_link_libraries(syphax_web PUBLIC m)
+    endif()
 endif()
 
 if(SYPHAX_WEB_ENABLE_TLS)
@@ -247,8 +254,12 @@ install(TARGETS syphax_web
 install(FILES ${SYPHAX_WEB_PUBLIC_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES
     ${SYPHAX_WEB_SYPHAX_DIR}/s_types.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_math.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_array.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_files.h
     ${SYPHAX_WEB_SYPHAX_DIR}/s_json.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_memory.h
+    ${SYPHAX_WEB_SYPHAX_DIR}/s_thread.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/syphax
 )
 install(FILES ${SYPHAX_WEB_TRANSLATIONS_FILE}

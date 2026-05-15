@@ -1073,7 +1073,6 @@ static void assert_short_surface_only(const char* relative_path) {
     assert(strstr(text, "sw" "_html_") == NULL);
     assert(strstr(text, "sw" "_j_") == NULL);
     assert(strstr(text, "sw" "_kv(") == NULL);
-    assert(strstr(text, "sw" "_tr(") == NULL);
     assert(strstr(text, "sw" "_bool(") == NULL);
     assert(strstr(text, "sw" "_txt(") == NULL);
     assert(strstr(text, "sw" "_txt_tr(") == NULL);

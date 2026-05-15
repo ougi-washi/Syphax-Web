@@ -1,3 +1,18 @@
+#ifndef _WIN32
+#    ifndef _XOPEN_SOURCE
+#        define _XOPEN_SOURCE 700
+#    endif
+#    ifndef _POSIX_C_SOURCE
+#        define _POSIX_C_SOURCE 200809L
+#    endif
+#endif
+
+#define SYPHAX_IMPLEMENTATION
+#include "syphax/s_files.h"
+#include "syphax/s_json.h"
+#include "syphax/s_memory.h"
+#include "syphax/s_thread.h"
+
 #include "sw_utility.h"
 #include "sw_internal.h"
 
