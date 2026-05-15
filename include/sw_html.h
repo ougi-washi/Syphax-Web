@@ -117,9 +117,10 @@ SW_API b8 sw_meta_charset(sw_buffer* buffer, const c8* charset);
 #define sw_br(_buffer, _attrs) SW_VOID_TAG((_buffer), "br", _attrs)
 #define sw_hr(_buffer, _attrs) SW_VOID_TAG((_buffer), "hr", _attrs)
 
-#define sw_table(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "table", _attrs, _content) 
-#define sw_tr(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "tr", _attrs, _content) 
+#define sw_table(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "table", _attrs, _content)
+#define sw_tr(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "tr", _attrs, _content)
 #define sw_td(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "td", _attrs, _content)
+#define sw_th(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "th", _attrs, _content)
 
 #ifdef __cplusplus
 }
