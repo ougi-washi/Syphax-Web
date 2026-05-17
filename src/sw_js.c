@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 static const c8* const sw_js_runtime_chunks[] = {
+
     "(function(){",
     "localStorage.removeItem('patient_id');",
     
