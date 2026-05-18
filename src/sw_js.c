@@ -8,6 +8,10 @@ static const c8* const sw_js_runtime_chunks[] = {
     "(function(){",
     "localStorage.removeItem('patient_id');",
     
+    "window.toggleDarkMode=function(){"
+    "document.body.classList.toggle('dark-mode');"
+    "};"
+
     "window.closeModal=function(id){"
     "var modal=document.getElementById(id);"
     "if(modal){modal.classList.remove('active');"
