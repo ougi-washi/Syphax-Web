@@ -895,16 +895,20 @@ static void test_js_short_api(void) {
     assert(count_occurrences(html, "data-swjs=\"fetch-replace\"") == 2);
     assert(count_occurrences(html, "data-swjs=\"toggle\"") == 1);
     assert(count_occurrences(html, "data-swjs=\"class-toggle\"") == 1);
+    assert(strstr(html, "<script data-swjs=\"runtime\">(function () {") != NULL);
+    assert(strstr(html, "function whenDocumentReady(callback) {") != NULL);
+    assert(strstr(html, "function sendRequest(config, requestState) {") != NULL);
     assert(strstr(html, "window.__swjsRuntime.liveSearch(") != NULL);
-    assert(strstr(html, "\"debounceMs\":150") != NULL);
-    assert(strstr(html, "\"debounceMs\":120") != NULL);
-    assert(strstr(html, "\"serializeForm\":true") != NULL);
-    assert(strstr(html, "\"abortStale\":true") != NULL);
-    assert(strstr(html, "\"preventSubmit\":true") != NULL);
-    assert(strstr(html, "\"method\":0") != NULL);
-    assert(strstr(html, "\"swapMode\":1") != NULL);
-    assert(strstr(html, "\"eventType\":2") != NULL);
-    assert(strstr(html, "\"className\":\"is-active\"") != NULL);
+    assert(strstr(html, "window.__swjsRuntime.liveSearch({\"formId\": \"search-form\",") != NULL);
+    assert(strstr(html, "\"debounceMs\": 150") != NULL);
+    assert(strstr(html, "\"debounceMs\": 120") != NULL);
+    assert(strstr(html, "\"serializeForm\": true") != NULL);
+    assert(strstr(html, "\"abortStale\": true") != NULL);
+    assert(strstr(html, "\"preventSubmit\": true") != NULL);
+    assert(strstr(html, "\"method\": 0") != NULL);
+    assert(strstr(html, "\"swapMode\": 1") != NULL);
+    assert(strstr(html, "\"eventType\": 2") != NULL);
+    assert(strstr(html, "\"className\": \"is-active\"") != NULL);
     assert(strstr(html, "\\\"") != NULL);
     assert(strstr(html, "\\x27") != NULL);
     assert(strstr(html, "\\n") != NULL);
@@ -912,7 +916,7 @@ static void test_js_short_api(void) {
     assert(strstr(html, "\\x3C/script>") != NULL);
     assert(strstr(html, "data-sw-state") != NULL);
     assert(strstr(html, "aria-busy") != NULL);
-    assert(strstr(html, "restoreFocus") != NULL);
+    assert(strstr(html, "restoreElementFocus") != NULL);
     assert(strstr(html, "data-sw-error") != NULL);
 
     sw_buffer_reset(h);

@@ -4,59 +4,259 @@
 #include <stdio.h>
 
 static const c8* const sw_js_runtime_chunks[] = {
+    "(function () {",
+    "if (window.__swjsRuntime) { return; }",
 
-    "(function(){",
-    "if(window.__swjsRuntime){return;}",
-    "function ready(fn){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fn,{once:true});}else{fn();}}",
-    "function byId(id){return id?document.getElementById(id):null;}",
-    "function eventName(type){switch(type){case 1:return 'input';case 2:return 'change';case 3:return 'submit';default:return 'click';}}",
-    "function setLoading(el,cls,on){if(el&&cls){el.classList[on?'add':'remove'](cls);}}",
-    "function emitState(target,state,error){if(!target){return;}target.setAttribute('data-sw-state',state);if(state==='loading'){target.setAttribute('aria-busy','true');}else{target.setAttribute('aria-busy','false');}if(state==='error'){target.setAttribute('data-sw-error','true');}else{target.removeAttribute('data-sw-error');}if(typeof CustomEvent==='function'){target.dispatchEvent(new CustomEvent('sw:'+state,{detail:error?{error:error}:void 0}));}}",
-    "function serializeForm(form){var params=new URLSearchParams();if(!form){return params;}new FormData(form).forEach(function(value,key){params.append(key,value);});return params;}",
-    "function appendQuery(url,query){if(!query){return url;}return url+(url.indexOf('?')===-1?'?':'&')+query;}",
-    "function restoreFocus(activeId){var next;if(!activeId){return;}next=byId(activeId);if(!next||typeof next.focus!=='function'){return;}try{next.focus({preventScroll:true});}catch(_){next.focus();}}",
-    "function replaceTarget(targetId,html,swapMode){var target=byId(targetId);var active=document.activeElement;var activeId=active&&active.id?active.id:null;var shouldRestore=!!(target&&active&&(active===target||target.contains(active)));if(!target){return;}if(swapMode===1){target.outerHTML=html;}else{target.innerHTML=html;}if(shouldRestore){restoreFocus(activeId);}}",
-    "function request(cfg,state){var form=byId(cfg.formId);var input=byId(cfg.inputId);var params;var url=cfg.endpoint||'';var fetchOptions;var method;",
-    "if(cfg.serializeForm){params=serializeForm(form);}else{params=new URLSearchParams();if(cfg.valueParam&&input){params.set(cfg.valueParam,input.value);}}",
-    "if(cfg.abortStale&&state.controller){state.controller.abort();}",
-    "state.requestId+=1;",
-    "var currentId=state.requestId;",
-    "var target=byId(cfg.targetId);",
-    "state.controller=(typeof AbortController==='function')?new AbortController():null;",
-    "setLoading(target,cfg.loadingClass,true);",
-    "emitState(target,'loading');",
-    "method=(cfg.method===1)?'POST':'GET';",
-    "fetchOptions={method:method,signal:state.controller?state.controller.signal:void 0};",
-    "if(method==='GET'){url=appendQuery(url,params.toString());}else{fetchOptions.headers={'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'};fetchOptions.body=params.toString();}",
-    "fetch(url,fetchOptions).then(function(response){if(!response.ok){throw new Error('sw_js request failed');}return response.text();})",
-    ".then(function(html){if(currentId!==state.requestId){return;}replaceTarget(cfg.targetId,html,cfg.swapMode);emitState(byId(cfg.targetId),'success');})",
-    ".catch(function(error){if(error&&error.name==='AbortError'){return;}console.error(error);emitState(byId(cfg.targetId),'error',error);})",
-    ".finally(function(){var currentTarget;if(currentId===state.requestId){currentTarget=byId(cfg.targetId);setLoading(currentTarget,cfg.loadingClass,false);if(currentTarget&&currentTarget.getAttribute('data-sw-state')==='loading'){emitState(currentTarget,'idle');}}});}",
-    "function bindEvent(element,type,handler){if(!element){return;}element.addEventListener(eventName(type),handler);}",
-    "window.__swjsRuntime={",
-    "liveSearch:function(cfg){ready(function(){var input=byId(cfg.inputId);var form=byId(cfg.formId);var state={controller:null,requestId:0,timer:0};",
-    "function queueRequest(){window.clearTimeout(state.timer);if(cfg.debounceMs>0){state.timer=window.setTimeout(function(){request(cfg,state);},cfg.debounceMs);}else{request(cfg,state);}}",
-    "if(!input||!byId(cfg.targetId)){return;}",
-    "input.addEventListener('input',queueRequest);",
-    "if(form&&cfg.preventSubmit){form.addEventListener('submit',function(event){event.preventDefault();window.clearTimeout(state.timer);request(cfg,state);});}",
-    "});},",
-    "fetchReplace:function(cfg){ready(function(){var trigger=byId(cfg.triggerId);var state={controller:null,requestId:0,timer:0};",
-    "if(!trigger||!byId(cfg.targetId)){return;}",
-    "bindEvent(trigger,cfg.eventType,function(event){if(cfg.preventDefault){event.preventDefault();}request(cfg,state);});",
-    "});},",
-    "toggle:function(cfg){ready(function(){var trigger=byId(cfg.triggerId);var target=byId(cfg.targetId);",
-    "function applyFromState(){var active=!!trigger.checked;if(cfg.invert){active=!active;}target.hidden=!active;}",
-    "if(!trigger||!target){return;}",
-    "if(cfg.useTriggerChecked){if(cfg.syncInitialState){applyFromState();}bindEvent(trigger,cfg.eventType,function(event){if(cfg.preventDefault){event.preventDefault();}applyFromState();});return;}",
-    "bindEvent(trigger,cfg.eventType,function(event){if(cfg.preventDefault){event.preventDefault();}target.hidden=!target.hidden;});",
-    "});},",
-    "classToggle:function(cfg){ready(function(){var trigger=byId(cfg.triggerId);var target=byId(cfg.targetId);",
-    "function applyFromState(){var active=!!trigger.checked;if(cfg.invert){active=!active;}target.classList.toggle(cfg.className,active);}",
-    "if(!trigger||!target||!cfg.className){return;}",
-    "if(cfg.useTriggerChecked){if(cfg.syncInitialState){applyFromState();}bindEvent(trigger,cfg.eventType,function(event){if(cfg.preventDefault){event.preventDefault();}applyFromState();});return;}",
-    "bindEvent(trigger,cfg.eventType,function(event){if(cfg.preventDefault){event.preventDefault();}target.classList.toggle(cfg.className);});",
-    "});}",
+    "function whenDocumentReady(callback) {"
+        "if (document.readyState === 'loading') {"
+            "document.addEventListener('DOMContentLoaded', callback, { once: true });"
+        "} else {"
+            "callback();"
+        "}"
+    "}",
+
+    "function findElementById(elementId) {"
+        "return elementId ? document.getElementById(elementId) : null;"
+    "}",
+
+    "function getEventName(eventType) {"
+        "switch (eventType) {"
+            "case 1: return 'input';"
+            "case 2: return 'change';"
+            "case 3: return 'submit';"
+            "default: return 'click';"
+        "}"
+    "}",
+
+    "function setLoadingClass(element, className, isLoading) {"
+        "if (element && className) {"
+            "element.classList[isLoading ? 'add' : 'remove'](className);"
+        "}"
+    "}",
+
+    "function emitRequestState(targetElement, stateName, requestError) {"
+        "if (!targetElement) { return; }"
+        "targetElement.setAttribute('data-sw-state', stateName);"
+        "if (stateName === 'loading') {"
+            "targetElement.setAttribute('aria-busy', 'true');"
+        "} else {"
+            "targetElement.setAttribute('aria-busy', 'false');"
+        "}"
+        "if (stateName === 'error') {"
+            "targetElement.setAttribute('data-sw-error', 'true');"
+        "} else {"
+            "targetElement.removeAttribute('data-sw-error');"
+        "}"
+        "if (typeof CustomEvent === 'function') {"
+            "targetElement.dispatchEvent(new CustomEvent('sw:' + stateName, {"
+                "detail: requestError ? { error: requestError } : void 0"
+            "}));"
+        "}"
+    "}",
+
+    "function serializeForm(formElement) {"
+        "var parameters = new URLSearchParams();"
+        "if (!formElement) { return parameters; }"
+        "new FormData(formElement).forEach(function (value, key) {"
+            "parameters.append(key, value);"
+        "});"
+        "return parameters;"
+    "}",
+
+    "function appendQueryString(url, queryString) {"
+        "if (!queryString) { return url; }"
+        "return url + (url.indexOf('?') === -1 ? '?' : '&') + queryString;"
+    "}",
+
+    "function restoreElementFocus(activeElementId) {"
+        "var element;"
+        "if (!activeElementId) { return; }"
+        "element = findElementById(activeElementId);"
+        "if (!element || typeof element.focus !== 'function') { return; }"
+        "try {"
+            "element.focus({ preventScroll: true });"
+        "} catch (_) {"
+            "element.focus();"
+        "}"
+    "}",
+
+    "function replaceTargetContent(targetId, htmlContent, swapMode) {"
+        "var targetElement = findElementById(targetId);"
+        "var activeElement = document.activeElement;"
+        "var activeElementId = activeElement && activeElement.id ? activeElement.id : null;"
+        "var shouldRestoreFocus = !!(targetElement && activeElement"
+            " && (activeElement === targetElement || targetElement.contains(activeElement)));"
+        "if (!targetElement) { return; }"
+        "if (swapMode === 1) {"
+            "targetElement.outerHTML = htmlContent;"
+        "} else {"
+            "targetElement.innerHTML = htmlContent;"
+        "}"
+        "if (shouldRestoreFocus) { restoreElementFocus(activeElementId); }"
+    "}",
+
+    "function sendRequest(config, requestState) {"
+        "var formElement = findElementById(config.formId);"
+        "var inputElement = findElementById(config.inputId);"
+        "var parameters;"
+        "var requestUrl = config.endpoint || '';"
+        "var requestOptions;"
+        "var requestMethod;"
+        "if (config.serializeForm) {"
+            "parameters = serializeForm(formElement);"
+        "} else {"
+            "parameters = new URLSearchParams();"
+            "if (config.valueParam && inputElement) {"
+                "parameters.set(config.valueParam, inputElement.value);"
+            "}"
+        "}"
+        "if (config.abortStale && requestState.controller) {"
+            "requestState.controller.abort();"
+        "}"
+        "requestState.requestId += 1;"
+        "var currentRequestId = requestState.requestId;"
+        "var targetElement = findElementById(config.targetId);"
+        "requestState.controller = typeof AbortController === 'function'"
+            " ? new AbortController() : null;"
+        "setLoadingClass(targetElement, config.loadingClass, true);"
+        "emitRequestState(targetElement, 'loading');"
+        "requestMethod = config.method === 1 ? 'POST' : 'GET';"
+        "requestOptions = {"
+            "method: requestMethod,"
+            "signal: requestState.controller ? requestState.controller.signal : void 0"
+        "};"
+        "if (requestMethod === 'GET') {"
+            "requestUrl = appendQueryString(requestUrl, parameters.toString());"
+        "} else {"
+            "requestOptions.headers = {"
+                "'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'"
+            "};"
+            "requestOptions.body = parameters.toString();"
+        "}"
+        "fetch(requestUrl, requestOptions)"
+            ".then(function (response) {"
+                "if (!response.ok) { throw new Error('sw_js request failed'); }"
+                "return response.text();"
+            "})"
+            ".then(function (htmlContent) {"
+                "if (currentRequestId !== requestState.requestId) { return; }"
+                "replaceTargetContent(config.targetId, htmlContent, config.swapMode);"
+                "emitRequestState(findElementById(config.targetId), 'success');"
+            "})"
+            ".catch(function (requestError) {"
+                "if (requestError && requestError.name === 'AbortError') { return; }"
+                "console.error(requestError);"
+                "emitRequestState(findElementById(config.targetId), 'error', requestError);"
+            "})"
+            ".finally(function () {"
+                "var currentTargetElement;"
+                "if (currentRequestId === requestState.requestId) {"
+                    "currentTargetElement = findElementById(config.targetId);"
+                    "setLoadingClass(currentTargetElement, config.loadingClass, false);"
+                    "if (currentTargetElement"
+                        " && currentTargetElement.getAttribute('data-sw-state') === 'loading') {"
+                        "emitRequestState(currentTargetElement, 'idle');"
+                    "}"
+                "}"
+            "});"
+    "}",
+
+    "function bindConfiguredEvent(element, eventType, handler) {"
+        "if (!element) { return; }"
+        "element.addEventListener(getEventName(eventType), handler);"
+    "}",
+
+    "window.__swjsRuntime = {"
+        "liveSearch: function (config) {"
+            "whenDocumentReady(function () {"
+                "var inputElement = findElementById(config.inputId);"
+                "var formElement = findElementById(config.formId);"
+                "var requestState = { controller: null, requestId: 0, timer: 0 };"
+                "function scheduleRequest() {"
+                    "window.clearTimeout(requestState.timer);"
+                    "if (config.debounceMs > 0) {"
+                        "requestState.timer = window.setTimeout(function () {"
+                            "sendRequest(config, requestState);"
+                        "}, config.debounceMs);"
+                    "} else {"
+                        "sendRequest(config, requestState);"
+                    "}"
+                "}"
+                "if (!inputElement || !findElementById(config.targetId)) { return; }"
+                "inputElement.addEventListener('input', scheduleRequest);"
+                "if (formElement && config.preventSubmit) {"
+                    "formElement.addEventListener('submit', function (event) {"
+                        "event.preventDefault();"
+                        "window.clearTimeout(requestState.timer);"
+                        "sendRequest(config, requestState);"
+                    "});"
+                "}"
+            "});"
+        "},"
+
+        "fetchReplace: function (config) {"
+            "whenDocumentReady(function () {"
+                "var triggerElement = findElementById(config.triggerId);"
+                "var requestState = { controller: null, requestId: 0, timer: 0 };"
+                "if (!triggerElement || !findElementById(config.targetId)) { return; }"
+                "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                    "if (config.preventDefault) { event.preventDefault(); }"
+                    "sendRequest(config, requestState);"
+                "});"
+            "});"
+        "},"
+
+        "toggle: function (config) {"
+            "whenDocumentReady(function () {"
+                "var triggerElement = findElementById(config.triggerId);"
+                "var targetElement = findElementById(config.targetId);"
+                "function applyCheckedState() {"
+                    "var isActive = !!triggerElement.checked;"
+                    "if (config.invert) { isActive = !isActive; }"
+                    "targetElement.hidden = !isActive;"
+                "}"
+                "if (!triggerElement || !targetElement) { return; }"
+                "if (config.useTriggerChecked) {"
+                    "if (config.syncInitialState) { applyCheckedState(); }"
+                    "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                        "if (config.preventDefault) { event.preventDefault(); }"
+                        "applyCheckedState();"
+                    "});"
+                    "return;"
+                "}"
+                "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                    "if (config.preventDefault) { event.preventDefault(); }"
+                    "targetElement.hidden = !targetElement.hidden;"
+                "});"
+            "});"
+        "},"
+
+        "classToggle: function (config) {"
+            "whenDocumentReady(function () {"
+                "var triggerElement = findElementById(config.triggerId);"
+                "var targetElement = findElementById(config.targetId);"
+                "function applyCheckedState() {"
+                    "var isActive = !!triggerElement.checked;"
+                    "if (config.invert) { isActive = !isActive; }"
+                    "targetElement.classList.toggle(config.className, isActive);"
+                "}"
+                "if (!triggerElement || !targetElement || !config.className) { return; }"
+                "if (config.useTriggerChecked) {"
+                    "if (config.syncInitialState) { applyCheckedState(); }"
+                    "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                        "if (config.preventDefault) { event.preventDefault(); }"
+                        "applyCheckedState();"
+                    "});"
+                    "return;"
+                "}"
+                "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                    "if (config.preventDefault) { event.preventDefault(); }"
+                    "targetElement.classList.toggle(config.className);"
+                "});"
+            "});"
+        "}"
     "};",
+
     "})();"
 };
 
@@ -114,14 +314,14 @@ static b8 sw_js_append_string(sw_char_array* out, const c8* value) {
 }
 
 static b8 sw_js_append_key(sw_char_array* out, const c8* key, b8* first) {
-    if (!*first && !sw_char_array_append_byte(out, ',')) {
+    if (!*first && !sw_char_array_append_cstr(out, ", ")) {
         return 0;
     }
     *first = 0;
     if (!sw_js_append_string(out, key)) {
         return 0;
     }
-    return sw_char_array_append_byte(out, ':');
+    return sw_char_array_append_cstr(out, ": ");
 }
 
 static b8 sw_js_append_string_field(sw_char_array* out, const c8* key, const c8* value, b8* first) {
