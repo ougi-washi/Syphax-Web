@@ -6,63 +6,7 @@
 static const c8* const sw_js_runtime_chunks[] = {
 
     "(function(){",
-    "localStorage.removeItem('patient_id');",
-    
-    "window.closeModal=function(id){"
-    "var modal=document.getElementById(id);"
-    "if(modal){modal.classList.remove('active');"
-    "var body=modal.querySelector('.modal-body');"
-    "if(body){body.innerHTML='';}"
-    "}"
-    "var shell=document.querySelector('.app-shell');"
-    "if(shell){shell.classList.remove('blurred');}"
-    "};"
-    "window.openModal=function(id,patientId){"
-    "if(!patientId||patientId==='undefined'){return;}"  // guard against undefined
-    "var modal=document.getElementById(id);"
-    "if(!modal){return;}"
-    "var body=modal.querySelector('.modal-body');"
-    "if(body){body.innerHTML='<p>Loading...</p>';}"
-    "var shell=document.querySelector('.app-shell');"
-    "if(shell){shell.classList.add('blurred');}"
-    "modal.classList.add('active');"
-    "fetch('/api/patient?id='+patientId)"
-    ".then(function(res){return res.text();})"
-    ".then(function(html){if(body){body.innerHTML=html;}})"
-    ".catch(function(){if(body){body.innerHTML='<p>Error.</p>';}});"
-    "};"
-      
-    "window.openTab=function(group,tabId){",
-    "var triggers=document.querySelectorAll('[data-tab-group=\"'+group+'\"][data-tab-target]');",
-    "var panels=document.querySelectorAll('[data-tab-panel=\"'+group+'\"]');",
-
-    "for(var i=0;i<panels.length;i++){",
-    "panels[i].hidden=(panels[i].id!==tabId);",
-    "}",
-
-    "for(var j=0;j<triggers.length;j++){",
-    "var t=triggers[j];",
-    "var active=t.getAttribute('data-tab-target')===tabId;",
-    "t.classList.toggle('active',active);",
-    "t.setAttribute('aria-selected',active?'true':'false');",
-    "}",
-    "};",
-    
-    "window.setActiveNav=function(el){",
-    "var links=document.querySelectorAll('nav a');",
-
-    "for(var i=0;i<links.length;i++){",
-    "links[i].classList.remove('active');",
-    "}",
-
-    "if(el){",
-    "el.classList.add('active');",
-    "}",
-    "};",
-    
-    "if(window.__swjsRuntimeLoaded){return;}",
-
-    "window.__swjsRuntimeLoaded=true;",
+    "if(window.__swjsRuntime){return;}",
     "function ready(fn){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fn,{once:true});}else{fn();}}",
     "function byId(id){return id?document.getElementById(id):null;}",
     "function eventName(type){switch(type){case 1:return 'input';case 2:return 'change';case 3:return 'submit';default:return 'click';}}",
@@ -389,4 +333,3 @@ b8 (sw_js_class)(sw_buffer* h, const sw_js_class_opts* opt) {
     sw_char_array_free(&config);
     return ok;
 }
-
