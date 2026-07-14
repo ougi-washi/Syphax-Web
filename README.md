@@ -228,6 +228,107 @@ if (sw_http_is(hm, "GET", "/style.css")) {
 
 `sw_http_serve_path` keeps requests inside the docroot.
 
+## Native Modals
+
+Modal behavior uses the browser's native `<dialog>` element. Syphax-Web only binds events to dialog actions; markup, content, validation, and styling stay in the application.
+
+```c
+#include "sw_js.h"
+
+sw_button(h, sw_attrs(
+    sw_attr_no_translate("id", "open-settings"),
+    sw_attr_no_translate("type", "button")
+), {
+    sw_text(h, "Open Settings");
+});
+
+sw_dialog(h, sw_attrs(
+    sw_attr_no_translate("id", "settings-dialog"),
+    sw_attr_no_translate("aria-labelledby", "settings-title")
+), {
+    sw_h2(h, sw_attrs(sw_attr_no_translate("id", "settings-title")), {
+        sw_text(h, "Settings");
+    });
+    sw_p(h, sw_attrs(), {
+        sw_text(h, "Application-owned modal content.");
+    });
+    sw_div(h, sw_attrs(sw_attr_no_translate("class", "actions")), {
+        sw_form(h, sw_attrs(sw_attr_no_translate("method", "dialog")), {
+            sw_button(h, sw_attrs(
+                sw_attr_bool("autofocus", 1),
+                sw_attr_no_translate("type", "submit"),
+                sw_attr_no_translate("value", "done")
+            ), {
+                sw_text(h, "Done");
+            });
+        });
+        sw_button(h, sw_attrs(
+            sw_attr_no_translate("id", "request-settings-close"),
+            sw_attr_no_translate("type", "button")
+        ), {
+            sw_text(h, "Cancel");
+        });
+        sw_button(h, sw_attrs(
+            sw_attr_no_translate("id", "force-settings-close"),
+            sw_attr_no_translate("type", "button")
+        ), {
+            sw_text(h, "Close Now");
+        });
+    });
+});
+
+sw_js_modal(h,
+    .trigger_id = "open-settings",
+    .target_id = "settings-dialog",
+    .close_on_backdrop = 1
+);
+sw_js_modal(h,
+    .trigger_id = "request-settings-close",
+    .target_id = "settings-dialog",
+    .return_value = "cancel",
+    .action = SW_JS_MODAL_REQUEST_CLOSE
+);
+sw_js_modal(h,
+    .trigger_id = "force-settings-close",
+    .target_id = "settings-dialog",
+    .return_value = "closed",
+    .action = SW_JS_MODAL_CLOSE
+);
+```
+
+`SW_JS_MODAL_REQUEST_CLOSE` fires the standard cancelable `cancel` event. `SW_JS_MODAL_CLOSE` closes immediately. Native `method="dialog"` forms need no JavaScript close binding, and their submitting button value becomes `dialog.returnValue`.
+
+Use standard dialog events for application logic:
+
+```js
+const dialog = document.getElementById('settings-dialog');
+
+dialog.addEventListener('cancel', function (event) {
+  if (hasUnsavedChanges()) event.preventDefault();
+});
+
+dialog.addEventListener('close', function () {
+  console.log(dialog.returnValue);
+});
+```
+
+Every dialog needs an accessible name through `aria-labelledby` or `aria-label` and a visible close control. Use `autofocus` when the browser's default initial focus is unsuitable. Backdrop dismissal is disabled unless `close_on_backdrop` is enabled.
+
+Styling is application-owned:
+
+```css
+dialog {
+  max-width: 36rem;
+  border: 1px solid #444;
+  background: #222;
+  color: #fff;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+}
+```
+
 ## Translations
 
 One JSON object per source string:

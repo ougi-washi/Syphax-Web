@@ -166,6 +166,62 @@ static const c8* const sw_js_runtime_chunks[] = {
         "element.addEventListener(getEventName(eventType), handler);"
     "}",
 
+    "function requestDialogClose(dialogElement, returnValue) {"
+        "var cancelEvent;"
+        "if (!dialogElement || !dialogElement.open) { return; }"
+        "if (typeof dialogElement.requestClose === 'function') {"
+            "dialogElement.requestClose(returnValue || '');"
+            "return;"
+        "}"
+        "if (typeof dialogElement.close !== 'function') { return; }"
+        "cancelEvent = new Event('cancel', { cancelable: true });"
+        "if (dialogElement.dispatchEvent(cancelEvent)) {"
+            "dialogElement.close(returnValue || '');"
+        "}"
+    "}",
+
+    "function isOutsideDialog(dialogElement, event) {"
+        "var bounds = dialogElement.getBoundingClientRect();"
+        "return event.clientX < bounds.left || event.clientX > bounds.right"
+            " || event.clientY < bounds.top || event.clientY > bounds.bottom;"
+    "}",
+
+    "function enableBackdropClose(dialogElement) {"
+        "var pointerDownOutside = false;"
+        "if (dialogElement.__swjsBackdropClose) { return; }"
+        "dialogElement.__swjsBackdropClose = true;"
+        "dialogElement.addEventListener('pointerdown', function (event) {"
+            "pointerDownOutside = event.target === dialogElement"
+                " && isOutsideDialog(dialogElement, event);"
+        "});"
+        "dialogElement.addEventListener('click', function (event) {"
+            "var shouldClose = pointerDownOutside && event.target === dialogElement"
+                " && isOutsideDialog(dialogElement, event);"
+            "pointerDownOutside = false;"
+            "if (shouldClose) { requestDialogClose(dialogElement, ''); }"
+        "});"
+    "}",
+
+    "function runModalAction(config) {"
+        "var dialogElement = findElementById(config.targetId);"
+        "var returnValue = config.returnValue || '';"
+        "if (!dialogElement) { return; }"
+        "if (config.closeOnBackdrop) { enableBackdropClose(dialogElement); }"
+        "if (config.action === 1) {"
+            "if (dialogElement.open && typeof dialogElement.close === 'function') {"
+                "dialogElement.close(returnValue);"
+            "}"
+            "return;"
+        "}"
+        "if (config.action === 2) {"
+            "requestDialogClose(dialogElement, returnValue);"
+            "return;"
+        "}"
+        "if (dialogElement.open || typeof dialogElement.showModal !== 'function') { return; }"
+        "dialogElement.returnValue = '';"
+        "dialogElement.showModal();"
+    "}",
+
     "window.__swjsRuntime = {"
         "liveSearch: function (config) {"
             "whenDocumentReady(function () {"
@@ -252,6 +308,17 @@ static const c8* const sw_js_runtime_chunks[] = {
                 "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
                     "if (config.preventDefault) { event.preventDefault(); }"
                     "targetElement.classList.toggle(config.className);"
+                "});"
+            "});"
+        "},"
+
+        "modal: function (config) {"
+            "whenDocumentReady(function () {"
+                "var triggerElement = findElementById(config.triggerId);"
+                "if (!triggerElement) { return; }"
+                "bindConfiguredEvent(triggerElement, config.eventType, function (event) {"
+                    "if (config.preventDefault) { event.preventDefault(); }"
+                    "runModalAction(config);"
                 "});"
             "});"
         "}"
@@ -431,6 +498,20 @@ static b8 sw_js_emit_class_config(sw_char_array* out, const sw_js_class_opts* op
     return sw_char_array_append_byte(out, '}');
 }
 
+static b8 sw_js_emit_modal_config(sw_char_array* out, const sw_js_modal_opts* opt) {
+    b8 first = 1;
+
+    if (!sw_char_array_append_byte(out, '{')) return 0;
+    if (!sw_js_append_string_field(out, "triggerId", opt->trigger_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "targetId", opt->target_id, &first)) return 0;
+    if (!sw_js_append_string_field(out, "returnValue", opt->return_value, &first)) return 0;
+    if (!sw_js_append_number_field(out, "eventType", (i32)opt->event_type, &first)) return 0;
+    if (!sw_js_append_number_field(out, "action", (i32)opt->action, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "preventDefault", opt->prevent_default, &first)) return 0;
+    if (!sw_js_append_bool_field(out, "closeOnBackdrop", opt->close_on_backdrop, &first)) return 0;
+    return sw_char_array_append_byte(out, '}');
+}
+
 b8 sw_js_runtime(sw_buffer* h) {
     sz i;
 
@@ -530,6 +611,21 @@ b8 (sw_js_class)(sw_buffer* h, const sw_js_class_opts* opt) {
     sw_char_array_init(&config);
     ok = sw_js_emit_class_config(&config, opt)
         && sw_js_emit_initializer(h, "class-toggle", "classToggle", &config);
+    sw_char_array_free(&config);
+    return ok;
+}
+
+b8 (sw_js_modal)(sw_buffer* h, const sw_js_modal_opts* opt) {
+    sw_char_array config;
+    b8 ok;
+
+    if (h == NULL || opt == NULL || opt->trigger_id == NULL || opt->target_id == NULL) {
+        return 0;
+    }
+
+    sw_char_array_init(&config);
+    ok = sw_js_emit_modal_config(&config, opt)
+        && sw_js_emit_initializer(h, "modal", "modal", &config);
     sw_char_array_free(&config);
     return ok;
 }

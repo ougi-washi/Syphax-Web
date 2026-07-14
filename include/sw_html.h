@@ -103,6 +103,7 @@ SW_API b8 sw_meta_charset(sw_buffer* buffer, const c8* charset);
 #define sw_li(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "li", _attrs, _content)
 #define sw_a(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "a", _attrs, _content)
 #define sw_form(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "form", _attrs, _content)
+#define sw_dialog(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "dialog", _attrs, _content)
 #define sw_label(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "label", _attrs, _content)
 #define sw_button(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "button", _attrs, _content)
 #define sw_textarea(_buffer, _attrs, _content) SW_BLOCK_TAG((_buffer), "textarea", _attrs, _content)

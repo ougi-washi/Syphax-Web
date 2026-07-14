@@ -25,6 +25,12 @@ typedef enum {
     SW_JS_OUTER = 1
 } sw_js_swap;
 
+typedef enum {
+    SW_JS_MODAL_OPEN = 0,
+    SW_JS_MODAL_CLOSE = 1,
+    SW_JS_MODAL_REQUEST_CLOSE = 2
+} sw_js_modal_action;
+
 typedef struct {
     const c8* form_id;
     const c8* input_id;
@@ -75,17 +81,29 @@ typedef struct {
     b8 invert;
 } sw_js_class_opts;
 
+typedef struct {
+    const c8* trigger_id;
+    const c8* target_id;
+    const c8* return_value;
+    sw_js_event event_type;
+    sw_js_modal_action action;
+    b8 prevent_default;
+    b8 close_on_backdrop;
+} sw_js_modal_opts;
+
 SW_API b8 sw_js_runtime(sw_buffer* buffer);
 SW_API b8 sw_js_live_search(sw_buffer* buffer, const c8* form_id, const c8* input_id, const c8* target_id, const c8* endpoint);
 SW_API b8 (sw_js_live)(sw_buffer* buffer, const sw_js_live_opts* opt);
 SW_API b8 (sw_js_fetch)(sw_buffer* buffer, const sw_js_fetch_opts* opt);
 SW_API b8 (sw_js_toggle)(sw_buffer* buffer, const sw_js_toggle_opts* opt);
 SW_API b8 (sw_js_class)(sw_buffer* buffer, const sw_js_class_opts* opt);
+SW_API b8 (sw_js_modal)(sw_buffer* buffer, const sw_js_modal_opts* opt);
 
 #define sw_js_live(_buffer, ...) (sw_js_live)((_buffer), &(sw_js_live_opts){ __VA_ARGS__ })
 #define sw_js_fetch(_buffer, ...) (sw_js_fetch)((_buffer), &(sw_js_fetch_opts){ __VA_ARGS__ })
 #define sw_js_toggle(_buffer, ...) (sw_js_toggle)((_buffer), &(sw_js_toggle_opts){ __VA_ARGS__ })
 #define sw_js_class(_buffer, ...) (sw_js_class)((_buffer), &(sw_js_class_opts){ __VA_ARGS__ })
+#define sw_js_modal(_buffer, ...) (sw_js_modal)((_buffer), &(sw_js_modal_opts){ __VA_ARGS__ })
 
 #ifdef __cplusplus
 }

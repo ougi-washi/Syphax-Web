@@ -154,6 +154,39 @@ static void render_home(sw_connection* connection, const app_state* state, const
                     sw_span(h, sw_attrs(sw_attr("class", "pill success")), {
                         sw_text(h, seen[0] != '\0' ? "Welcome back" : "First visit");
                     });
+                    sw_button(h, sw_attrs(
+                        sw_attr_no_translate("id", "queue-help-open"),
+                        sw_attr_no_translate("class", "button"),
+                        sw_attr_no_translate("type", "button")
+                    ), {
+                        sw_text(h, "How It Works");
+                    });
+                });
+
+                sw_dialog(h, sw_attrs(
+                    sw_attr_no_translate("id", "queue-help"),
+                    sw_attr_no_translate("class", "example-dialog"),
+                    sw_attr_no_translate("aria-labelledby", "queue-help-title")
+                ), {
+                    sw_h2(h, sw_attrs(sw_attr_no_translate("id", "queue-help-title")), {
+                        sw_text(h, "Live Queue");
+                    });
+                    sw_p(h, sw_attrs(), {
+                        sw_text(h, "The modal uses native dialog behavior while its content and styling remain part of the application.");
+                    });
+                    sw_form(h, sw_attrs(
+                        sw_attr_no_translate("class", "actions"),
+                        sw_attr_no_translate("method", "dialog")
+                    ), {
+                        sw_button(h, sw_attrs(
+                            sw_attr_bool("autofocus", 1),
+                            sw_attr_no_translate("class", "button"),
+                            sw_attr_no_translate("type", "submit"),
+                            sw_attr_no_translate("value", "close")
+                        ), {
+                            sw_text(h, "Close");
+                        });
+                    });
                 });
 
                 sw_section(h, sw_attrs(sw_attr("class", "grid two")), {
@@ -231,6 +264,11 @@ static void render_home(sw_connection* connection, const app_state* state, const
                     .serialize_form = 1,
                     .abort_stale = 1,
                     .prevent_default = 1
+                );
+                (void)sw_js_modal(h,
+                    .trigger_id = "queue-help-open",
+                    .target_id = "queue-help",
+                    .close_on_backdrop = 1
                 );
             });
         });

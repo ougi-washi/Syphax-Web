@@ -791,6 +791,14 @@ static void test_html_short_macros(void) {
     sw_el(h, "custom-card", sw_attrs(sw_attr("data-role", "demo")), {
         sw_text(h, "Custom");
     });
+    sw_dialog(h, sw_attrs(
+        sw_attr_no_translate("id", "work-dialog"),
+        sw_attr_no_translate("aria-labelledby", "work-dialog-title")
+    ), {
+        sw_h2(h, sw_attrs(sw_attr_no_translate("id", "work-dialog-title")), {
+            sw_text(h, "Work");
+        });
+    });
     sw_table(h, sw_attrs(sw_attr("data-role", "grid")), {
         sw_tr(h, sw_attrs(), {
             sw_th(h, sw_attrs(), { sw_text(h, "Work"); });
@@ -813,6 +821,7 @@ static void test_html_short_macros(void) {
     assert(strstr(html, "<a href=\"/docs\">文档</a>") != NULL);
     assert(strstr(html, "<button type=\"button\">Open</button>") != NULL);
     assert(strstr(html, "<custom-card data-role=\"demo\">Custom</custom-card>") != NULL);
+    assert(strstr(html, "<dialog id=\"work-dialog\" aria-labelledby=\"work-dialog-title\"><h2 id=\"work-dialog-title\">工作</h2></dialog>") != NULL);
     assert(strstr(html, "<table data-role=\"grid\"><tr><th>工作</th><td>队列</td></tr></table>") != NULL);
 
     sw_buffer_free(h);
@@ -867,15 +876,31 @@ static void test_js_short_api(void) {
         .use_trigger_checked = 0,
         .invert = 1
     };
+    const sw_js_modal_opts modal_close = {
+        .trigger_id = "modal-close",
+        .target_id = "settings-dialog",
+        .return_value = "quo\"te'\n</script>\\",
+        .event_type = SW_JS_CHANGE,
+        .action = SW_JS_MODAL_CLOSE,
+        .prevent_default = 1,
+        .close_on_backdrop = 1
+    };
     const c8* html;
+    sz valid_len;
 
     assert(h != NULL);
+    assert(!(sw_js_modal)(NULL, &modal_close));
+    assert(!(sw_js_modal)(h, NULL));
+    assert(!(sw_js_modal)(h, &(sw_js_modal_opts){ .target_id = "settings-dialog" }));
+    assert(!(sw_js_modal)(h, &(sw_js_modal_opts){ .trigger_id = "modal-open" }));
+    assert(sw_buffer_len(h) == 0);
     assert(sw_js_runtime(h));
     assert(sw_js_runtime(h));
     assert((sw_js_live)(h, &live_search));
     assert((sw_js_fetch)(h, &fetch_replace));
     assert((sw_js_toggle)(h, &toggle));
     assert((sw_js_class)(h, &class_toggle));
+    assert((sw_js_modal)(h, &modal_close));
     assert(sw_js_live(h,
         .form_id = "macro-form",
         .input_id = "macro-input",
@@ -887,6 +912,16 @@ static void test_js_short_api(void) {
         .target_id = "macro-results",
         .endpoint = "/macro-fetch"
     ));
+    assert(sw_js_modal(h,
+        .trigger_id = "modal-open",
+        .target_id = "settings-dialog"
+    ));
+    assert(sw_js_modal(h,
+        .trigger_id = "modal-request-close",
+        .target_id = "settings-dialog",
+        .return_value = "cancel",
+        .action = SW_JS_MODAL_REQUEST_CLOSE
+    ));
     assert(sw_js_live_search(h, "search-form", "search-input", "search-preview", "/search-preview"));
 
     html = sw_buffer_data(h);
@@ -895,10 +930,18 @@ static void test_js_short_api(void) {
     assert(count_occurrences(html, "data-swjs=\"fetch-replace\"") == 2);
     assert(count_occurrences(html, "data-swjs=\"toggle\"") == 1);
     assert(count_occurrences(html, "data-swjs=\"class-toggle\"") == 1);
+    assert(count_occurrences(html, "data-swjs=\"modal\"") == 3);
     assert(strstr(html, "<script data-swjs=\"runtime\">(function () {") != NULL);
     assert(strstr(html, "function whenDocumentReady(callback) {") != NULL);
     assert(strstr(html, "function sendRequest(config, requestState) {") != NULL);
     assert(strstr(html, "window.__swjsRuntime.liveSearch(") != NULL);
+    assert(strstr(html, "window.__swjsRuntime.modal(") != NULL);
+    assert(strstr(html, "window.__swjsRuntime.modal({\"triggerId\": \"modal-open\", \"targetId\": \"settings-dialog\", \"returnValue\": null, \"eventType\": 0, \"action\": 0, \"preventDefault\": false, \"closeOnBackdrop\": false})") != NULL);
+    assert(strstr(html, "\"triggerId\": \"modal-close\"") != NULL);
+    assert(strstr(html, "\"returnValue\": \"quo\\\"te\\x27\\n\\x3C/script>\\\\\"") != NULL);
+    assert(strstr(html, "\"eventType\": 2, \"action\": 1") != NULL);
+    assert(strstr(html, "\"preventDefault\": true, \"closeOnBackdrop\": true") != NULL);
+    assert(strstr(html, "\"action\": 2") != NULL);
     assert(strstr(html, "window.__swjsRuntime.liveSearch({\"formId\": \"search-form\",") != NULL);
     assert(strstr(html, "\"debounceMs\": 150") != NULL);
     assert(strstr(html, "\"debounceMs\": 120") != NULL);
@@ -918,7 +961,21 @@ static void test_js_short_api(void) {
     assert(strstr(html, "aria-busy") != NULL);
     assert(strstr(html, "restoreElementFocus") != NULL);
     assert(strstr(html, "data-sw-error") != NULL);
+    assert(strstr(html, "function requestDialogClose(dialogElement, returnValue) {") != NULL);
+    assert(strstr(html, "dialogElement.requestClose(returnValue || '');") != NULL);
+    assert(strstr(html, "new Event('cancel', { cancelable: true })") != NULL);
+    assert(strstr(html, "dialogElement.showModal();") != NULL);
+    assert(strstr(html, "dialogElement.returnValue = '';") != NULL);
+    assert(strstr(html, "dialogElement.__swjsBackdropClose") != NULL);
+    assert(strstr(html, "getBoundingClientRect") != NULL);
+    assert(strstr(html, "window.openModal") == NULL);
+    assert(strstr(html, "window.closeModal") == NULL);
+    assert(strstr(html, "localStorage") == NULL);
 
+    valid_len = sw_buffer_len(h);
+    assert(!(sw_js_modal)(h, &(sw_js_modal_opts){ .target_id = "settings-dialog" }));
+    assert(!(sw_js_modal)(h, &(sw_js_modal_opts){ .trigger_id = "modal-open" }));
+    assert(sw_buffer_len(h) == valid_len);
     sw_buffer_reset(h);
     assert(sw_js_runtime(h));
     assert(count_occurrences(sw_buffer_data(h), "data-swjs=\"runtime\"") == 1);
